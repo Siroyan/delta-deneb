@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "course_id": "motegi_oval_2025_full_v2",
+  "plan_id": "dummy-race-002",
+  "plan_type": "demo",
+  "laps": [
+    {"lap": 1, "route_id": "first_lap", "runs": [{"on_s_m": 0, "off_s_m": 300}, {"on_s_m": 720, "off_s_m": 950}, {"on_s_m": 1430, "off_s_m": 1680}]},
+    {"lap": 2, "route_id": "regular_lap", "runs": [{"on_s_m": 140, "off_s_m": 420}, {"on_s_m": 830, "off_s_m": 1100}, {"on_s_m": 1600, "off_s_m": 1880}]},
+    {"lap": 3, "route_id": "regular_lap", "runs": [{"on_s_m": 120, "off_s_m": 390}, {"on_s_m": 850, "off_s_m": 1130}, {"on_s_m": 1650, "off_s_m": 1920}]},
+    {"lap": 4, "route_id": "regular_lap", "runs": [{"on_s_m": 150, "off_s_m": 430}, {"on_s_m": 880, "off_s_m": 1160}, {"on_s_m": 1690, "off_s_m": 1960}]},
+    {"lap": 5, "route_id": "regular_lap", "runs": [{"on_s_m": 130, "off_s_m": 410}, {"on_s_m": 850, "off_s_m": 1120}, {"on_s_m": 1640, "off_s_m": 1930}]},
+    {"lap": 6, "route_id": "regular_lap", "runs": [{"on_s_m": 160, "off_s_m": 440}, {"on_s_m": 900, "off_s_m": 1170}, {"on_s_m": 1700, "off_s_m": 1970}]},
+    {"lap": 7, "route_id": "final_lap", "runs": [{"on_s_m": 140, "off_s_m": 420}, {"on_s_m": 820, "off_s_m": 1090}, {"on_s_m": 1560, "off_s_m": 1830}]}
+  ]
+}
