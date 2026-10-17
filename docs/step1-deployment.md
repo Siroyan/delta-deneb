@@ -1,5 +1,7 @@
 # Step 1: AWS配信基盤とヘルスチェック
 
+この手順はDev Containerを前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
+
 ## 実装範囲
 
 Step 1は、確定済みの静的UIをAWSのURLで開き、CloudFrontからLambdaへの疎通を確認するための基盤。
@@ -27,25 +29,28 @@ flowchart LR
 
 ## 認証情報の取り扱い
 
-このリポジトリと実装には、アクセスキー・シークレットキー・セッショントークン・プロファイル名を保存しない。AWSアカウントIDも固定しない。CDK CLIを利用してデプロイする際に、手元の認証からアカウントを解決する。
+このリポジトリと実装には、アクセスキー・シークレットキー・セッショントークン・プロファイル名を保存しない。AWSアカウントIDも固定しない。CDK CLIを利用してデプロイする際に、コンテナ内に設定したAWS認証からアカウントを解決する。
 
-AWSログイン、初回のbootstrap、diff、deployはユーザーのPCで実行する。認証情報や設定ファイルをチャットへ渡す必要はない。
+AWSログイン、初回のbootstrap、diff、deployはユーザー自身がコンテナ内で実行する。認証情報や設定ファイルをチャットへ渡す必要はない。
 
-## 1. ローカルの準備
+## 1. Dev Containerを開く
 
-推奨環境は[Dev Container](devcontainer.md)。DockerとVS CodeのDev Containers拡張でリポジトリを開き、「Dev Containers: Reopen in Container」を実行する。Python 3.13、Node.js 24、npm、uv、AWS CLI v2と依存パッケージがコンテナ内に揃う。以下のテストやCDKコマンドはコンテナ内のターミナルで実行する。
+ホスト側にはDockerとVS Code・Dev Containers拡張を用意する。Python・Node.js・npm・uv・AWS CLIのホストへのインストールは不要。
 
-コンテナを使わない場合だけ、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 22以降、npm、AWS CLI v2を自分のPCに用意し、次を実行する。
+1. Dockerを起動する。
+2. VS Codeで`delta-deneb`のリポジトリフォルダを開く。
+3. コマンドパレットから「Dev Containers: Reopen in Container」を実行する。
+4. ビルドと初期化が完了したら、VS Codeで新しいターミナルを開く。
+
+Python 3.13、Node.js 24、npm、uv、AWS CLI v2がコンテナ内に揃う。初期化時に`uv sync --locked`と`npm ci`が自動実行されるため、依存関係を手動でインストールする必要はない。
+
+コンテナ内の作業フォルダへ移動する。
 
 ```sh
-cd /Users/siroyan/workspace/delta-deneb
-git switch codex/step1-aws-foundation
-
-uv sync --locked
-npm ci
+cd /workspaces/delta-deneb
 ```
 
-`.python-version`でLambdaと同じPython 3.13を指定し、Pythonの依存関係は`pyproject.toml`と`uv.lock`で管理する。uvの仮想環境は、Dev Containerでは`/home/vscode/.venvs/delta-deneb`、コンテナを使わない場合はリポジトリの`.venv/`に作成する。手動で有効化する必要はない。`uv sync --locked`は開発用のpytestも導入し、ロックファイルと定義が一致しなければエラーにする。Node.jsの依存バージョンは`package-lock.json`で固定する。
+Pythonの依存関係は`pyproject.toml`と`uv.lock`、Node.jsの依存関係は`package-lock.json`で管理する。Pythonの仮想環境はuvがコンテナ内で管理し、手動で有効化する必要はない。依存関係の更新やコンテナの再ビルドについては[Dev Containerの手順](devcontainer.md)を参照。
 
 テストと認証不要のテンプレート生成:
 
@@ -59,24 +64,24 @@ Python側の処理は、直接`uv run --locked python -m pytest`と`uv run --loc
 
 `synth:offline`はCDKアプリを直接実行し、AWSへの問い合わせや認証処理を行わず`cdk.out/`にテンプレートを生成する。`cdk.out/DeltaDenebDev.template.json`を確認できる。アカウント部分はCloudFormationの擬似パラメーターで解決し、ダミーのアカウントIDを埋め込まない。
 
-## 2. 手元でAWSの接続先を確認
+## 2. コンテナ内でAWS認証を設定・確認する
 
-ここからのAWS操作はユーザーが実行する。Dev ContainerにはホストのAWS認証情報を自動マウントしない。コンテナでデプロイする場合は、自分でコンテナ内に認証を設定してから進める。詳細は[Dev Containerの認証情報の扱い](devcontainer.md#awsの認証情報)を参照。
+ここからのAWS操作はユーザーが実行する。ホストのAWS認証情報は自動マウントされないため、コンテナ内に利用する認証方式を設定してから進める。IAM Identity Center（SSO）を利用する場合の設定・ログイン例は[Dev Containerの認証情報の扱い](devcontainer.md#awsの認証情報)を参照。ブラウザ認証はホスト側のブラウザで行う。
 
-`YOUR_PROFILE`は利用する実行環境で設定したプロファイル名に置き換える。
+`YOUR_PROFILE`はコンテナ内で設定したプロファイル名に置き換える。
 
 ```sh
 aws configure list-profiles
 aws sts get-caller-identity --profile YOUR_PROFILE --query Account --output text
 ```
 
-この結果は自分のPCで確認すればよく、チャットへ貼り付ける必要はない。プロファイルが未設定の場合は、普段利用する認証方式で先に設定する。[AWS CLIの認証設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html)と[プロファイル設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)を参照。
+表示されたアカウントIDがデプロイ先と一致することを確認する。結果をチャットへ貼り付ける必要はない。認証設定はコンテナのホームに保存され、コンテナを作り直した場合は再設定する。[AWS CLIの認証設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html)と[プロファイル設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)も参照。
 
 アカウントIDは[AWSコンソール右上のアカウントメニューからも確認できる](https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html)。
 
-## 3. 手元でデプロイ
+## 3. コンテナ内からデプロイする
 
-初回のみ、CDK配布用のバケット・ロールなどを作成するbootstrapを実行する。
+デプロイ先のAWSアカウント・リージョンで初回のみ、CDK配布用のバケット・ロールなどを作成するbootstrapを実行する。コンテナを作り直しただけなら、bootstrapを繰り返す必要はない。
 
 ```sh
 npm run cdk -- bootstrap --profile YOUR_PROFILE
@@ -102,11 +107,11 @@ CDKはIAMポリシーなどの差分を表示する。`--require-approval never`
 | `ApiLogGroupName` | 業務用Lambdaのログ確認 |
 | `FunctionUrl` | IAM認証で保護されたオリジン。未認証の直接アクセスは403が正常 |
 
-`cdk-outputs.dev.json`はGit管理対象外。実行時に使うプロファイルやアカウント情報をソースへ追記する必要はない。
+`cdk-outputs.dev.json`はリポジトリのルートに生成され、Git管理対象外。次の確認手順でもこのファイルを使う。実行時に使うプロファイルやアカウント情報をソースへ追記する必要はない。
 
 ## 4. デプロイ結果の確認
 
-以下のスクリプトはPython標準ライブラリだけで動作し、AWS認証情報やAWS SDKを利用しない。
+デプロイに使ったコンテナ内で、以下のスクリプトを実行する。Python標準ライブラリだけで動作し、AWS認証情報やAWS SDKを利用しない。
 
 ```sh
 uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json
@@ -121,7 +126,7 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 5. Function URLへの未認証の直接アクセスが403になる。
 6. S3への未認証の直接アクセスが403になる。
 
-`SiteUrl`をブラウザで開いて、模擬データの自動更新、北が上のコース図、戦略JSONの読み込みも確認する。CloudFront側でGETとHEADに限定しているため、それ以外のメソッドはオリジン到達前に拒否される場合がある。
+`SiteUrl`をホスト側のブラウザで開いて、模擬データの自動更新、北が上のコース図、戦略JSONの読み込みも確認する。CloudFront側でGETとHEADに限定しているため、それ以外のメソッドはオリジン到達前に拒否される場合がある。
 
 ヘルスチェックの例:
 
@@ -146,13 +151,13 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 - アカウント未指定のオフラインsynthが成功。Tokyo向けの18リソースを生成し、追加のコンテキスト問い合わせはない。
 - 固定済みのNode依存を、空の作業ディレクトリで`npm ci`によりインストールできることを確認。
 
-AWSへのbootstrap・diff・deployと実環境の疎通確認は未実行。ユーザーの手元で実行する項目として分離している。デプロイ確認スクリプトのテストはHTTP応答を模擬しており、実AWSでの成功を示すものではない。
+AWSへのbootstrap・diff・deployと実環境の疎通確認は未実行。上記の手順に従い、ユーザー自身がコンテナ内で実行する。デプロイ確認スクリプトのテストはHTTP応答を模擬しており、実AWSでの成功を示すものではない。
 
 Step 1の実環境での完了条件は、`SiteUrl`でデモが開き、上記のデプロイ確認がすべて成功すること。
 
 ## 更新・保持・次の段階
 
-静的UIを更新した場合も同じ`cdk deploy`で配信する。独自のS3同期コマンドや手動でのパブリック公開は不要。
+静的UIを更新した場合も、コンテナ内から手順3と同じデプロイコマンドで配信する。独自のS3同期コマンドや手動でのパブリック公開は不要。
 
 スタック削除時もサイトバケットと業務用ログは保持する設計。削除後に同じスタックを作り直すと、新しいバケットを作成する場合がある。既存のIoT Core、DynamoDB、SiteWise、Grafanaのリソースは、このスタックの管理・削除対象に含めない。
 
