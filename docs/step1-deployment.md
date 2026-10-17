@@ -119,9 +119,124 @@ aws logout --profile delta-deneb-login
 
 既存のスタックとS3バケットは保持する。今回のCDKアプリは現行形式のbootstrapで用意されるIAMロール・配布バケット・SSMパラメーターなどを利用するため、このS3バケットだけの構成を、そのままデプロイ基盤として使えるとは扱わない。
 
-専用bootstrapと権限ポリシーの生成、およびアプリ側の参照設定を実装済み。[専用CDK配布基盤の初回準備](bootstrap.md)の手順1〜3をユーザー自身が実行する。`npm run prepare:bootstrap`でAWSへ接続せずテンプレートを生成し、初回だけ管理者Profileから`DeltaDenebDevToolkit`を作成する。
+ここでは専用の配布基盤`DeltaDenebDevToolkit`を新しく作成し、手順2-1で作成した専用ユーザーへデプロイ権限を付与する。以下の2-4-1〜2-4-5を順に実行すれば、この章だけで初回準備が完了する。AWSを操作するコマンドはユーザー自身がDev Container内で実行する。
 
-この基盤は`denebdev1`という識別子を使う。管理者権限のポリシーを専用ユーザーへ付けず、対象スタックへのデプロイ権限と、アプリ用IAMロールの権限上限を設定する。ただしCloudFrontの共有設定APIにはアカウント全体へ及ぶ権限が残るため、実行前に[権限の範囲](bootstrap.md#作成されるものと権限の範囲)も確認する。
+使い分ける名前は次のとおり。
+
+| 名前 | 用途 |
+| --- | --- |
+| `delta-deneb-login` | 専用ユーザー`delta-deneb-deployer`のProfile。通常のアプリデプロイに使用 |
+| `delta-deneb-bootstrap` | 既存の管理者のProfile。配布基盤の初回作成・更新に使用 |
+| `DeltaDenebDevToolkit` | 今回作成する専用の配布基盤のCloudFormationスタック名 |
+| `denebdev1` | 配布用バケットやロールなどを識別するqualifier。アプリ側も同じ値を参照 |
+| `delta-deneb-dev` | 手順3でデプロイするアプリのCloudFormationスタック名 |
+
+#### 2-4-1. 最新のコードと依存関係を取得する
+
+Dev Container内で、作業中のブランチが`codex/step1-aws-foundation`であることを確認してから更新する。
+
+```sh
+cd /workspaces/delta-deneb
+git branch --show-current
+git pull --ff-only
+uv sync --locked
+npm ci
+```
+
+別のブランチだった場合は、未コミットの変更を確認してから`git switch codex/step1-aws-foundation`で切り替える。更新に失敗した場合は、その原因を解消してから次へ進む。
+
+#### 2-4-2. 初回準備用のテンプレートを生成する
+
+```sh
+npm run prepare:bootstrap
+npm run synth:offline
+```
+
+初回準備用のCloudFormationテンプレートが`bootstrap.out/dev.template.json`に生成される。アプリ側のテンプレートは`cdk.out/DeltaDenebDev.template.json`に生成される。どちらの生成処理もAWSに接続せず、リソースはまだ作成されない。
+
+専用ユーザー名を`delta-deneb-deployer`以外にした場合だけ、最初のコマンドの代わりに次を実行する。末尾のユーザー名は、自分で作成したものへ置き換える。
+
+```sh
+npm run prepare:bootstrap -- --deployer-user-name 自分で作成したIAMユーザー名
+```
+
+#### 2-4-3. 初回準備用の管理者Profileを設定する
+
+CloudFormation、IAM、S3、ECR、SSMのリソースを作成できる、既存の管理者を使う。普段使う`delta-deneb-deployer`へ管理者権限を追加する必要はない。
+
+```sh
+aws configure set region ap-northeast-1 --profile delta-deneb-bootstrap
+aws configure set output json --profile delta-deneb-bootstrap
+aws login --profile delta-deneb-bootstrap --remote
+```
+
+表示されたURLをホスト側のブラウザで開き、既存の管理者で認証する。専用ユーザーのブラウザセッションが選ばれていないことを確認する。ブラウザに表示された認証コードは、自分のコンテナ内ターミナルへ入力する。
+
+続けて接続先とログインしたユーザーを確認する。
+
+```sh
+aws sts get-caller-identity --profile delta-deneb-bootstrap
+```
+
+`Account`が手順2-3で確認したアカウントと同じこと、`Arn`が初回準備に使う管理者であることを自分で確認する。認証コードや認証情報をチャットへ送る必要はない。
+
+#### 2-4-4. 作成内容と権限を確認して配布基盤を作成する
+
+VS Codeで`bootstrap.out/dev.template.json`を開く。今回のテンプレートは、主に次のリソースと権限を設定する。
+
+- 配布用S3バケット、ECRリポジトリ、CDK用IAMロール、bootstrapバージョンを記録するSSMパラメーターを作成する。ECRはCDK標準テンプレートとの互換性のために用意し、専用ユーザーにはイメージ配布ロールの利用を許可しない。
+- 作成済みの`delta-deneb-deployer`へ、専用ロールを引き受ける権限と、対象スタック・バージョン情報の読み取り権限を付与する。新しいユーザーやアクセスキーは作成しない。
+- 通常のデプロイ先は`delta-deneb-dev`スタックに限定する。専用ユーザーには、配布基盤自体を更新する権限を付与しない。
+- CloudFormation実行ロールに`AdministratorAccess`を付けず、アプリ配布に必要な許可と権限の上限を設定する。アプリ用IAMロールにも権限の上限を必須にし、デプロイ経由での上限の削除・変更を制限する。
+- S3、Lambda、ログの操作対象は名前・アカウント・リージョンで絞る。DynamoDBやIoTへのアクセス権限は含めない。
+- CloudFrontディストリビューションの更新・削除は`Project=delta-deneb`と`Environment=dev`のタグで制限する。ただし識別タグのない既存ディストリビューションへ同じタグを付ける余地は残るため、タグによる厳密な所有権分離を保証する構成ではない。
+- **CloudFrontのキャッシュポリシー、オリジンリクエストポリシー、OACの一部APIはリソース単位でIAM権限を絞れず、該当する設定の作成・取得・更新・削除権限がアカウント全体に及ぶ。** 他のシステムで共有する設定へ影響する余地がある。ロググループ一覧とCloudFormationのテンプレート概要の読み取り権限も残る。
+
+内容を確認したら、管理者Profileで次を実行する。
+
+```sh
+aws cloudformation deploy \
+  --template-file bootstrap.out/dev.template.json \
+  --stack-name DeltaDenebDevToolkit \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region ap-northeast-1 \
+  --profile delta-deneb-bootstrap \
+  --tags Project=delta-deneb Environment=dev
+```
+
+`CAPABILITY_NAMED_IAM`は、名前付きIAMリソースをテンプレートが作成することへの確認指定。このコマンドは変更セットを作成して実行し、スタックの処理完了を待つ。
+
+スタック名は必ず`DeltaDenebDevToolkit`を使う。既存の`CDKToolkit`を指定したり、引数なしの`cdk bootstrap`を実行したりしない。
+
+#### 2-4-5. 作成結果を確認して専用ユーザーへ戻す
+
+```sh
+aws cloudformation describe-stacks \
+  --stack-name DeltaDenebDevToolkit \
+  --region ap-northeast-1 \
+  --profile delta-deneb-bootstrap \
+  --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}'
+```
+
+初回作成では`Status`が`CREATE_COMPLETE`であることを確認する。失敗した場合は、AWSコンソールのTokyoリージョンで「CloudFormation」→「DeltaDenebDevToolkit」→「イベント」を開き、失敗したリソースの理由を確認してから進める。
+
+成功したら管理者Profileからログアウトし、通常のデプロイ用Profileを確認する。
+
+```sh
+aws logout --profile delta-deneb-bootstrap
+aws sts get-caller-identity --profile delta-deneb-login
+```
+
+専用ユーザーの認証期限が切れていた場合は、次を実行して専用ユーザーで再認証し、本人確認を再実行する。
+
+```sh
+aws login --profile delta-deneb-login --remote
+aws sts get-caller-identity --profile delta-deneb-login
+```
+
+`Arn`が`user/delta-deneb-deployer`で終わることを確認したら、初回準備は完了。次の手順3へ進む。独自のユーザー名を使っている場合は、その名前と一致することを確認する。
+
+配布基盤の検証状況や将来の更新・`prod`環境については、[専用CDK配布基盤の補足](bootstrap.md#検証状況と更新)を参照。
 
 ## 3. コンテナ内からデプロイする
 
