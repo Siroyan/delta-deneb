@@ -33,7 +33,9 @@ AWSログイン、初回のbootstrap、diff、deployはユーザーのPCで実�
 
 ## 1. ローカルの準備
 
-必要環境は[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 22以降とnpm。Python 3.13はuvが用意するため、事前インストールや仮想環境の手動作成は不要。デプロイするPCにはAWS CLI v2と利用するAWS認証設定も必要。
+推奨環境は[Dev Container](devcontainer.md)。DockerとVS CodeのDev Containers拡張でリポジトリを開き、「Dev Containers: Reopen in Container」を実行する。Python 3.13、Node.js 24、npm、uv、AWS CLI v2と依存パッケージがコンテナ内に揃う。以下のテストやCDKコマンドはコンテナ内のターミナルで実行する。
+
+コンテナを使わない場合だけ、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 22以降、npm、AWS CLI v2を自分のPCに用意し、次を実行する。
 
 ```sh
 cd /Users/siroyan/workspace/delta-deneb
@@ -43,7 +45,7 @@ uv sync --locked
 npm ci
 ```
 
-`.python-version`でLambdaと同じPython 3.13を指定し、Pythonの依存関係は`pyproject.toml`と`uv.lock`で管理する。uvが内部で`.venv/`を作成・同期するが、手動で有効化する必要はない。`uv sync --locked`は開発用のpytestも導入し、ロックファイルと定義が一致しなければエラーにする。Node.jsの依存バージョンは`package-lock.json`で固定する。
+`.python-version`でLambdaと同じPython 3.13を指定し、Pythonの依存関係は`pyproject.toml`と`uv.lock`で管理する。uvの仮想環境は、Dev Containerでは`/home/vscode/.venvs/delta-deneb`、コンテナを使わない場合はリポジトリの`.venv/`に作成する。手動で有効化する必要はない。`uv sync --locked`は開発用のpytestも導入し、ロックファイルと定義が一致しなければエラーにする。Node.jsの依存バージョンは`package-lock.json`で固定する。
 
 テストと認証不要のテンプレート生成:
 
@@ -59,7 +61,9 @@ Python側の処理は、直接`uv run --locked python -m pytest`と`uv run --loc
 
 ## 2. 手元でAWSの接続先を確認
 
-`YOUR_PROFILE`は自分のPCで設定したプロファイル名に置き換える。
+ここからのAWS操作はユーザーが実行する。Dev ContainerにはホストのAWS認証情報を自動マウントしない。コンテナでデプロイする場合は、自分でコンテナ内に認証を設定してから進める。詳細は[Dev Containerの認証情報の扱い](devcontainer.md#awsの認証情報)を参照。
+
+`YOUR_PROFILE`は利用する実行環境で設定したプロファイル名に置き換える。
 
 ```sh
 aws configure list-profiles
@@ -137,6 +141,7 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 
 - Python側25件: ヘルスチェック、CDKの権限・キャッシュ・依存関係、配布パッケージ、デプロイ確認スクリプトのテストが成功。
 - `uv sync --locked`でPython 3.13の環境を構築し、`uv run --locked`でPython側テストとオフラインsynthが成功。
+- Dev Container用イメージをARM64でビルドし、コンテナ内の初期化・全41件のテスト・オフラインsynth・UIのHTTP配信が成功。詳細は[Dev Containerの確認状況](devcontainer.md#確認状況)を参照。
 - JavaScript側16件: 既存の模擬API・戦略パーサーのテストが成功。
 - アカウント未指定のオフラインsynthが成功。Tokyo向けの18リソースを生成し、追加のコンテキスト問い合わせはない。
 - 固定済みのNode依存を、空の作業ディレクトリで`npm ci`によりインストールできることを確認。

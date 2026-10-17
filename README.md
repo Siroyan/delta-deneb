@@ -14,29 +14,33 @@ delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバ
 
 セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。認証情報はチャットやリポジトリへ渡さず、AWS操作は手元で実行する。
 
-Python環境は[uv](https://docs.astral.sh/uv/getting-started/installation/)で管理する。uvとNode.js 22以降・npmを準備し、次のコマンドで依存関係を同期する。
+開発はDev Containerを推奨する。DockerとVS CodeのDev Containers拡張を用意し、このリポジトリを開いて「Dev Containers: Reopen in Container」を実行する。Python 3.13・Node.js 24・npm・uv・AWS CLI v2がコンテナ内に入り、依存関係も初回起動時に自動で同期される。ローカルへのNode.js・npm・uv・Pythonの追加インストールは不要。
+
+詳しい操作は[Dev Containerの手順](docs/devcontainer.md)を参照。起動後はコンテナ内のターミナルで次を実行できる。
+
+```sh
+npm test
+npm run test:infra
+npm run synth:offline
+npm run preview
+```
+
+テストとテンプレート生成はAWSに接続しない。Pythonの依存関係は引き続きuvで管理し、仮想環境の手動作成・有効化は不要。
+
+コンテナを使わず開発する場合は、uv・Python 3.13・Node.js 22以降・npmを用意し、リポジトリ内で次を実行する。
 
 ```sh
 uv sync --locked
 npm ci
 ```
 
-PythonはLambdaと同じ3.13を使う。uvが必要なPythonと仮想環境を管理するため、環境の手動作成や有効化は不要。依存関係の同期後は、次のコマンドでAWSへ接続せずテストとテンプレート生成を実行できる。
-
-```sh
-npm test
-npm run test:infra
-npm run synth:offline
-```
-
 ## UIデモの起動
 
 ```sh
-cd /Users/siroyan/workspace/delta-deneb
-uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web
+npm run preview
 ```
 
-ブラウザで <http://127.0.0.1:8080/> を開く。`web/`がS3に配置する静的コンテンツのルートで、ビルド・外部CDN・追加ライブラリは不要。ES ModulesとコースJSONを読み込むため、`file://`ではなくHTTP経由で開く。
+リポジトリのルートで実行し、ブラウザで <http://127.0.0.1:8080/> を開く。Dev Containerでは8080番ポートをローカルに転送する。`web/`がS3に配置する静的コンテンツのルートで、ビルド・外部CDN・追加ライブラリは不要。ES ModulesとコースJSONを読み込むため、`file://`ではなくHTTP経由で開く。
 
 - 現在速度、平均速度、周回、経過時間、GPS由来のコース図、速度グラフ、ラップ一覧、ラップ分析を表示。
 - 3秒ごとに模擬APIから取得。走行中／更新停止／APIエラー／GPS欠測／データなし／ゴールを右上で切り替えられる。
