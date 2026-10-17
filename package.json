@@ -10,6 +10,7 @@
     "test": "node --test tests/*.test.js",
     "test:infra": "uv run --locked python -m pytest",
     "synth:offline": "uv run --locked python app.py",
+    "prepare:bootstrap": "uv run --locked python -m scripts.prepare_bootstrap",
     "cdk": "cdk",
     "preview": "uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web"
   },

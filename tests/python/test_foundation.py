@@ -173,3 +173,14 @@ def test_lambda_asset_contains_source_only_not_local_bytecode(assembly):
                 health_assets.append(source)
     assert len(health_assets) == 1
     assert {path.name for path in health_assets[0].iterdir()} == {"handler.py"}
+
+
+def test_app_uses_dedicated_bootstrap_and_bounds_every_runtime_role(assembly, foundation):
+    properties = json.loads((Path(assembly.directory) / "manifest.json").read_text())["artifacts"]["TestFoundation"]["properties"]
+    assert properties["bootstrapStackVersionSsmParameter"] == "/cdk-bootstrap/denebdev1/version"
+    assert "cdk-denebdev1-deploy-role-" in properties["assumeRoleArn"]
+    assert "hnb659fds" not in json.dumps(json.loads((Path(assembly.directory) / "TestFoundation.assets.json").read_text()))
+    for role in resources(foundation, "AWS::IAM::Role").values():
+        assert "delta-deneb-runtime-boundary-dev" in json.dumps(role["Properties"]["PermissionsBoundary"])
+    _, distribution = only(foundation, "AWS::CloudFront::Distribution")
+    assert {tag["Key"]: tag["Value"] for tag in distribution["Properties"]["Tags"]} == {"Project": "delta-deneb", "Environment": "dev"}

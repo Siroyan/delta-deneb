@@ -66,7 +66,7 @@ aws login --profile delta-deneb-login --remote
 aws sts get-caller-identity --profile delta-deneb-login
 ```
 
-`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。ログイン用ポリシーにはデプロイ権限は含まれないため、[CDKのデプロイ基盤と権限の準備](step1-deployment.md#2-4-cdkのデプロイ基盤と権限を準備する)も必要。既存の`CDKToolkit`はS3バケットのみで、専用の現行形式の基盤は準備前の状態。
+`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。ログイン用ポリシーにはデプロイ権限は含まれないため、[専用CDK配布基盤の初回準備](bootstrap.md)も必要。既存の`CDKToolkit`はS3バケットのみのため保持し、管理者Profileで専用の`DeltaDenebDevToolkit`を作成する。
 
 Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login/cache/`に保存される。有効期限が切れたら同じ`aws login`を再実行する。コンテナを作り直した場合はリージョン・出力形式の設定から再実行する。
 
@@ -75,6 +75,8 @@ Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login
 ## 確認状況
 
 2026-10-17にARM64のDocker環境で、イメージのビルド、開発ユーザーによる初期化、JavaScriptの16件・Pythonの25件のテストを確認した。`npm run synth:offline`でTokyo向けの18リソースを生成でき、`npm run preview`からHTML・JavaScript・コースJSONを取得できることも確認済み。
+
+専用bootstrap追加後はPython側34件・JavaScript側16件の全50件をコンテナ内で確認した。専用テンプレートの生成と`cfn-lint`による静的検証も成功している。
 
 確認にはリポジトリの共有マウントと専用の`node_modules/`ボリュームを使い、ホストのPython環境・Nodeパッケージと分離した。AWSへの接続・認証操作は行っていない。VS Codeでの接続操作とポート転送そのものは、この検証には含めていない。
 

@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import CfnOutput, DefaultStackSynthesizer, Duration, RemovalPolicy, Stack, Tags
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
 from aws_cdk import aws_lambda as lambda_
@@ -11,13 +12,25 @@ from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as deployment
 from constructs import Construct
 
+from infra.deployment_settings import deployment_settings
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class FoundationStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *, stage: str, **kwargs):
+        settings = deployment_settings(stage)
+        kwargs.setdefault("synthesizer", DefaultStackSynthesizer(qualifier=settings["qualifier"]))
         super().__init__(scope, construct_id, **kwargs)
+
+        boundary = iam.ManagedPolicy.from_managed_policy_arn(
+            self, "RuntimeBoundary",
+            self.format_arn(service="iam", region="", resource="policy", resource_name=settings["runtime_boundary"]),
+        )
+        iam.PermissionsBoundary.of(self).apply(boundary)
+        Tags.of(self).add("Project", "delta-deneb")
+        Tags.of(self).add("Environment", stage)
 
         self.site_bucket = s3.Bucket(
             self,

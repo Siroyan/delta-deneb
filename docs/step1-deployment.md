@@ -119,18 +119,13 @@ aws logout --profile delta-deneb-login
 
 既存のスタックとS3バケットは保持する。今回のCDKアプリは現行形式のbootstrapで用意されるIAMロール・配布バケット・SSMパラメーターなどを利用するため、このS3バケットだけの構成を、そのままデプロイ基盤として使えるとは扱わない。
 
-次の準備が必要。手順2-1〜2-3の専用ユーザー作成と一時認証の設定は、先に実行できる。
+専用bootstrapと権限ポリシーの生成、およびアプリ側の参照設定を実装済み。[専用CDK配布基盤の初回準備](bootstrap.md)の手順1〜3をユーザー自身が実行する。`npm run prepare:bootstrap`でAWSへ接続せずテンプレートを生成し、初回だけ管理者Profileから`DeltaDenebDevToolkit`を作成する。
 
-1. 管理者がdelta-deneb用の現行形式のbootstrap構成を準備する。既存の`CDKToolkit`と名前が衝突しないよう、スタック名とqualifier（配布バケットやIAMロール名に使う識別子）を分ける。
-2. CloudFormation実行ロールの権限と必要な許可の境界を定義する。CDKの標準設定は`AdministratorAccess`なので、名前を分けるだけでは権限制限にならない。
-3. CDKアプリのsynthesizerにも同じqualifierを設定し、新しいデプロイ基盤を参照させる。
-4. 専用ユーザーには、使用を認めるCDKロールのARNを指定して`sts:AssumeRole`を付与する。
-
-専用bootstrapの設定、実行ロールのポリシー、CDKアプリのqualifier変更は未実装。この準備が完了するまで手順3は実行しない。認証手順の整備だけで、デプロイ権限の制限が完了したとは扱わない。[bootstrapのカスタマイズ](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-customizing.html)と[AWS CDKのセキュリティ設定](https://docs.aws.amazon.com/cdk/v2/guide/best-practices-security.html)を参照。
+この基盤は`denebdev1`という識別子を使う。管理者権限のポリシーを専用ユーザーへ付けず、対象スタックへのデプロイ権限と、アプリ用IAMロールの権限上限を設定する。ただしCloudFrontの共有設定APIにはアカウント全体へ及ぶ権限が残るため、実行前に[権限の範囲](bootstrap.md#作成されるものと権限の範囲)も確認する。
 
 ## 3. コンテナ内からデプロイする
 
-手順2-4の専用bootstrapと権限設定、およびCDKアプリ側の対応が完了していることを前提に、差分を確認してからデプロイする。
+手順2-4で`DeltaDenebDevToolkit`の作成が成功してから、専用ユーザーで差分を確認してデプロイする。初回準備用の管理者Profileは使わない。
 
 ```sh
 npm run cdk -- diff DeltaDenebDev --profile delta-deneb-login
@@ -187,9 +182,9 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 
 2026-10-17に、認証なしで次を確認した。
 
-- Python側25件: ヘルスチェック、CDKの権限・キャッシュ・依存関係、配布パッケージ、デプロイ確認スクリプトのテストが成功。
+- Python側34件: ヘルスチェック、CDKの権限・キャッシュ・依存関係、配布パッケージ、デプロイ確認スクリプト、専用bootstrapの信頼関係・権限上限のテストが成功。
 - `uv sync --locked`でPython 3.13の環境を構築し、`uv run --locked`でPython側テストとオフラインsynthが成功。
-- Dev Container用イメージをARM64でビルドし、コンテナ内の初期化・全41件のテスト・オフラインsynth・UIのHTTP配信が成功。詳細は[Dev Containerの確認状況](devcontainer.md#確認状況)を参照。
+- Dev Container用イメージをARM64でビルドし、コンテナ内の初期化・オフラインsynth・UIのHTTP配信が成功。bootstrap追加後の全50件のテストもコンテナ内で成功。詳細は[Dev Containerの確認状況](devcontainer.md#確認状況)を参照。
 - JavaScript側16件: 既存の模擬API・戦略パーサーのテストが成功。
 - アカウント未指定のオフラインsynthが成功。Tokyo向けの18リソースを生成し、追加のコンテキスト問い合わせはない。
 - 固定済みのNode依存を、空の作業ディレクトリで`npm ci`によりインストールできることを確認。

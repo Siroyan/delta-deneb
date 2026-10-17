@@ -23,6 +23,4 @@ stack = FoundationStack(
     ),
     description="delta-deneb static dashboard and health API foundation (Step 1)",
 )
-cdk.Tags.of(stack).add("Project", "delta-deneb")
-cdk.Tags.of(stack).add("Environment", stage)
 app.synth()
