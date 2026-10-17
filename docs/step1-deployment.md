@@ -1,6 +1,6 @@
 # Step 1: AWS配信基盤とヘルスチェック
 
-この手順はDev Containerを前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
+この手順はDev ContainerとIAMユーザーのアクセスキーによる認証を前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
 
 ## 実装範囲
 
@@ -29,9 +29,9 @@ flowchart LR
 
 ## 認証情報の取り扱い
 
-このリポジトリと実装には、アクセスキー・シークレットキー・セッショントークン・プロファイル名を保存しない。AWSアカウントIDも固定しない。CDK CLIを利用してデプロイする際に、コンテナ内に設定したAWS認証からアカウントを解決する。
+アクセスキーID・シークレットアクセスキーは、ユーザー自身がコンテナ内のAWS CLIへ入力する。チャットやリポジトリには保存しない。AWSアカウントIDもコードに固定せず、デプロイ時にコンテナ内のAWS認証から解決する。
 
-AWSログイン、初回のbootstrap、diff、deployはユーザー自身がコンテナ内で実行する。認証情報や設定ファイルをチャットへ渡す必要はない。
+この手順ではProfile（認証情報と接続先に付ける名前）を`delta-deneb-dev`に統一する。Profileの設定、初回のbootstrap、diff、deployはユーザー自身がコンテナ内で実行する。
 
 ## 1. Dev Containerを開く
 
@@ -64,34 +64,66 @@ Python側の処理は、直接`uv run --locked python -m pytest`と`uv run --loc
 
 `synth:offline`はCDKアプリを直接実行し、AWSへの問い合わせや認証処理を行わず`cdk.out/`にテンプレートを生成する。`cdk.out/DeltaDenebDev.template.json`を確認できる。アカウント部分はCloudFormationの擬似パラメーターで解決し、ダミーのアカウントIDを埋め込まない。
 
-## 2. コンテナ内でAWS認証を設定・確認する
+## 2. IAMユーザーのアクセスキーでProfileを設定する
 
-ここからのAWS操作はユーザーが実行する。ホストのAWS認証情報は自動マウントされないため、コンテナ内に利用する認証方式を設定してから進める。IAM Identity Center（SSO）を利用する場合の設定・ログイン例は[Dev Containerの認証情報の扱い](devcontainer.md#awsの認証情報)を参照。ブラウザ認証はホスト側のブラウザで行う。
+ここからのAWS操作はユーザーが実行する。ホストのAWS認証情報は自動マウントされないため、コンテナ内にProfileを設定する。この方式ではSSO Start URLやSSO registration scopesの入力は不要。
 
-`YOUR_PROFILE`はコンテナ内で設定したプロファイル名に置き換える。
+### 2-1. アクセスキーを用意する
+
+利用できるアクセスキーIDとシークレットアクセスキーを保管済みなら、手順2-2へ進む。新しく作成する場合は、ホスト側のブラウザでAWSコンソールを開く。
+
+1. 「IAM」→「ユーザー」から、デプロイに使用する自分のIAMユーザーを選ぶ。
+2. 「セキュリティ認証情報」→「アクセスキー」→「アクセスキーを作成」を選ぶ。
+3. 用途は「コマンドラインインターフェイス（CLI）」を選び、画面の案内に従って作成する。
+4. アクセスキーIDとシークレットアクセスキーを安全な場所に保管する。シークレットアクセスキーを取得できるのは作成時のみ。
+
+詳しくは[AWS公式のIAMユーザー向け設定手順](https://docs.aws.amazon.com/cli/latest/userguide/cli-authentication-user.html)を参照。キーの作成権限がない場合は、AWSアカウントの管理者に確認する。
+
+### 2-2. コンテナ内でProfileを作成する
+
+Dev Container内のターミナルで実行する。
+
+```sh
+aws configure --profile delta-deneb-dev
+```
+
+対話形式の質問に、次を入力する。
+
+| 質問 | 入力する内容 |
+| --- | --- |
+| `AWS Access Key ID` | 用意したアクセスキーID |
+| `AWS Secret Access Key` | 用意したシークレットアクセスキー |
+| `Default region name` | `ap-northeast-1` |
+| `Default output format` | `json` |
+
+キーは対話形式の入力欄にだけ入力し、コマンドへ直接埋め込まない。`aws configure sso`を実行中なら`Ctrl+C`で中断し、上のコマンドから設定する。
+
+### 2-3. Profileと接続先を確認する
 
 ```sh
 aws configure list-profiles
-aws sts get-caller-identity --profile YOUR_PROFILE --query Account --output text
+aws sts get-caller-identity --profile delta-deneb-dev --query Account --output text
 ```
 
-表示されたアカウントIDがデプロイ先と一致することを確認する。結果をチャットへ貼り付ける必要はない。認証設定はコンテナのホームに保存され、コンテナを作り直した場合は再設定する。[AWS CLIの認証設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html)と[プロファイル設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)も参照。
+一覧に`delta-deneb-dev`があり、表示されたアカウントIDがデプロイ先と一致することを確認する。結果をチャットへ貼り付ける必要はない。
 
 アカウントIDは[AWSコンソール右上のアカウントメニューからも確認できる](https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html)。
+
+認証情報はコンテナ内の`~/.aws/credentials`、リージョン・出力形式は`~/.aws/config`に保存される。コンテナを停止・再開した場合はそのまま使えるが、作り直した場合は手順2-2から再設定する。ホストへのコピーや自動マウントは設定しない。
 
 ## 3. コンテナ内からデプロイする
 
 デプロイ先のAWSアカウント・リージョンで初回のみ、CDK配布用のバケット・ロールなどを作成するbootstrapを実行する。コンテナを作り直しただけなら、bootstrapを繰り返す必要はない。
 
 ```sh
-npm run cdk -- bootstrap --profile YOUR_PROFILE
+npm run cdk -- bootstrap --profile delta-deneb-dev
 ```
 
 差分を確認してからデプロイする。
 
 ```sh
-npm run cdk -- diff DeltaDenebDev --profile YOUR_PROFILE
-npm run cdk -- deploy DeltaDenebDev --profile YOUR_PROFILE --outputs-file cdk-outputs.dev.json
+npm run cdk -- diff DeltaDenebDev --profile delta-deneb-dev
+npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-dev --outputs-file cdk-outputs.dev.json
 ```
 
 CDKはIAMポリシーなどの差分を表示する。`--require-approval never`は設定していない。リージョンはコードでTokyoに固定している。

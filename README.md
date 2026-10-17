@@ -6,13 +6,13 @@ delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバ
 2026-10-17時点で、静的UI・模擬APIと、Python CDKによるStep 1の配信基盤を実装。AWSへのデプロイ・実環境での確認は、ユーザーの手元で行う。
 
 - リポジトリ: https://github.com/Siroyan/delta-deneb
-- ローカル作業フォルダ: `/Users/siroyan/workspace/delta-deneb`
+- コンテナ内の作業フォルダ: `/workspaces/delta-deneb`
 
 ## AWS配信基盤（Step 1）
 
 非公開S3、CloudFront標準URL、IAM認証のLambda Function URL、Pythonの`GET /api/health`、ログをCDKで定義している。Tokyo (`ap-northeast-1`) を使用し、アカウントID・認証情報をコードに固定しない。
 
-セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。認証情報はチャットやリポジトリへ渡さず、AWS操作は手元で実行する。
+セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。IAMユーザーのアクセスキーでProfile `delta-deneb-dev`を設定し、AWS操作はユーザー自身がDev Container内で実行する。認証情報はチャットやリポジトリへ渡さない。
 
 開発はDev Containerを推奨する。DockerとVS CodeのDev Containers拡張を用意し、このリポジトリを開いて「Dev Containers: Reopen in Container」を実行する。Python 3.13・Node.js 24・npm・uv・AWS CLI v2がコンテナ内に入り、依存関係も初回起動時に自動で同期される。ローカルへのNode.js・npm・uv・Pythonの追加インストールは不要。
 
@@ -129,7 +129,7 @@ URLの非告知や検索除外だけでは、閲覧者を制限できない。
 | Step 2 | DynamoDBから最新値・履歴・ラップ情報を取得するAPI | 実際の走行データをAPIから取得できる |
 | Step 3 | UIと実APIの接続、通信断復帰、実運用の検証 | delta-vegaからピット画面まで一連の動作を確認できる |
 
-Step 1のコードと認証不要の検証を実装済み。AWSへのbootstrap・diff・deployと公開URLでの確認は手元で行う。`main`から`dev`、`dev`から`codex/step1-aws-foundation`を作成し、Step 1の変更を実装ブランチに分けている。
+Step 1のコードと認証不要の検証を実装済み。AWSへのbootstrap・diff・deployはユーザー自身がDev Container内で実行し、公開URLはホスト側のブラウザで確認する。`main`から`dev`、`dev`から`codex/step1-aws-foundation`を作成し、Step 1の変更を実装ブランチに分けている。
 
 初回の受け入れ条件は、共有URLからログイン操作なしで画面を開けること、delta-vegaの新しいデータが所定の間隔で表示されること、更新が止まったときに古いデータだと判断できること。
 更新間隔・停止判定の閾値・具体的な表示項目は未確定。

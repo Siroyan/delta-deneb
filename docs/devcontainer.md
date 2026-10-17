@@ -46,16 +46,25 @@ npm ci
 
 ## AWSの認証情報
 
-ホストの`~/.aws`、AWS認証用の環境変数、Dockerソケットをこの設定から自動で渡すことはない。初期化処理でもAWSへのログインやデプロイは行わない。
+このプロジェクトではIAMユーザーのアクセスキーで認証し、Profile名は`delta-deneb-dev`を使う。ホストの`~/.aws`、AWS認証用の環境変数、Dockerソケットをこの設定から自動で渡すことはない。初期化処理でもAWSの認証設定やデプロイは行わない。
 
-デプロイするときは、ユーザー自身がコンテナ内で普段の認証方式を設定する。IAM Identity Center（SSO）を利用している場合の例:
+ユーザー自身がDev Container内のターミナルで実行する。
 
 ```sh
-aws configure sso --use-device-code --no-browser
-aws sso login --profile YOUR_PROFILE --use-device-code --no-browser
+aws configure --profile delta-deneb-dev
 ```
 
-案内されたURLをホスト側のブラウザで開き、ユーザー自身が認証する。アクセスキーやトークンをチャットへ送る必要はない。認証設定はコンテナのホームに置かれ、コンテナを作り直すと失われるため再設定する。
+質問に従って、アクセスキーID・シークレットアクセスキー・リージョン`ap-northeast-1`・出力形式`json`を入力する。キーはチャットやリポジトリへ送らず、対話形式の入力欄に入力する。
+
+接続先を確認する。
+
+```sh
+aws sts get-caller-identity --profile delta-deneb-dev --query Account --output text
+```
+
+表示されたアカウントIDがデプロイ先と一致することを確認する。キーの取得方法と各入力項目は[Step 1のProfile設定手順](step1-deployment.md#2-iamユーザーのアクセスキーでprofileを設定する)を参照。
+
+認証情報はコンテナ内の`~/.aws/credentials`、リージョン・出力形式は`~/.aws/config`に保存される。コンテナを停止・再開した場合は維持されるが、作り直した場合は`aws configure --profile delta-deneb-dev`で再設定する。
 
 認証後のbootstrap・diff・deployは[Step 1のデプロイ手順](step1-deployment.md)を参照。
 
