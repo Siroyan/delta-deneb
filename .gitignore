@@ -9,6 +9,11 @@ venv/
 
 # AWS CDK
 cdk.out/
+cdk.context.json
+cdk-outputs*.json
+node_modules/
+.coverage
+htmlcov/
 
 # Local credentials and configuration
 .env

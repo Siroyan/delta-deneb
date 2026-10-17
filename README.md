@@ -3,10 +3,24 @@
 delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバーがブラウザで確認するシステム。
 ログイン操作なしで共有URLから開き、走行中のデータと結果を自動更新する。
 
-2026-10-12時点で、静的UIと模擬APIを実装。CDKの実装言語はPython。AWS構成は設計案であり、まだAWSにはデプロイしていない。
+2026-10-17時点で、静的UI・模擬APIと、Python CDKによるStep 1の配信基盤を実装。AWSへのデプロイ・実環境での確認は、ユーザーの手元で行う。
 
 - リポジトリ: https://github.com/Siroyan/delta-deneb
 - ローカル作業フォルダ: `/Users/siroyan/workspace/delta-deneb`
+
+## AWS配信基盤（Step 1）
+
+非公開S3、CloudFront標準URL、IAM認証のLambda Function URL、Pythonの`GET /api/health`、ログをCDKで定義している。Tokyo (`ap-northeast-1`) を使用し、アカウントID・認証情報をコードに固定しない。
+
+セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。認証情報はチャットやリポジトリへ渡さず、AWS操作は手元で実行する。
+
+準備済みの開発環境では、次のコマンドでAWSへ接続せずテストとテンプレート生成を実行できる。
+
+```sh
+npm test
+npm run test:infra
+npm run synth:offline
+```
 
 ## UIデモの起動
 
@@ -41,7 +55,7 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory web
 
 ### データ取得の境界とテスト
 
-`web/js/mock-api.js`の`getLatest()`が取得処理の境界。将来、ここを同一オリジンのLambda APIへの`fetch()`に置き換える。現在のブラウザはAWSを呼ばない。
+`web/js/mock-api.js`の`getLatest()`が取得処理の境界。Step 3で、ここを同一オリジンのLambda APIへの`fetch()`に置き換える。Step 1でAWS上に配信した場合も、画面の走行データはブラウザ内で模擬する。
 
 Node.jsで模擬APIと戦略パーサーのテストを実行できる。追加パッケージは不要。
 
@@ -52,6 +66,8 @@ node --test tests/*.test.js
 `latest`内の項目はdelta-vegaのMQTTフィールドに合わせている。ただし`timestamp_ms`は車載機の時計であり、UNIX時刻として表示しない。受信時刻の表示には別の`received_at_ms`を使用する。`phase`、ラップ履歴、表示用位置などはデモ用の補助情報で、Lambdaの実応答形式はまだ確定していない。
 
 ## 構成案
+
+以下は実データ接続まで含めた構成。Step 1では配信基盤とヘルスチェックを実装し、DynamoDBには接続しない。
 
 ```mermaid
 flowchart LR
@@ -94,27 +110,27 @@ URLの非告知や検索除外だけでは、閲覧者を制限できない。
 
 ブラウザから任意のテーブルやパーティションを指定できるAPIにはせず、対象の車両／走行と公開項目をサーバー側で制御する。
 
-## 最初の実装範囲
+## 3段階の実装
 
-1. テーブルのキー・保存データ例・表示対象を確認し、最新データの取得方法とAPI応答を決める。
-2. Python CDKで、S3、CloudFront、Lambda、Function URL、OAC、IAM、CloudWatch Logsを定義する。
-3. Lambdaに最新データ取得APIを実装する。データなし、取得失敗、更新停止を区別する。
-4. 静的画面に必要な値、計測時刻、データの経過時間、通信状態を表示する。取得失敗時は最後のデータが古いことを示し、再試行する。
-5. 最新取得・権限・オリジンの制限をテストし、`cdk synth`と`cdk diff`で構成を検証する。
-6. 対象AWS環境へデプロイして実データで確認する。既存の受信・可視化構成を変更する必要がある場合は、差分を明示して扱う。
+| 段階 | 内容 | 完了条件 |
+| --- | --- | --- |
+| Step 1 | Python CDK、S3・CloudFront配信、Lambdaヘルスチェック | AWSのURLでデモ画面が開き、疎通とオリジンへの直接アクセス拒否を確認できる |
+| Step 2 | DynamoDBから最新値・履歴・ラップ情報を取得するAPI | 実際の走行データをAPIから取得できる |
+| Step 3 | UIと実APIの接続、通信断復帰、実運用の検証 | delta-vegaからピット画面まで一連の動作を確認できる |
+
+Step 1のコードと認証不要の検証を実装済み。AWSへのbootstrap・diff・deployと公開URLでの確認は手元で行う。`main`から`dev`、`dev`から`codex/step1-aws-foundation`を作成し、Step 1の変更を実装ブランチに分けている。
 
 初回の受け入れ条件は、共有URLからログイン操作なしで画面を開けること、delta-vegaの新しいデータが所定の間隔で表示されること、更新が止まったときに古いデータだと判断できること。
 更新間隔・停止判定の閾値・具体的な表示項目は未確定。
 
-## 実装前に確認する情報
+## Step 2以降で確認する情報
 
-- AWSアカウント、リージョン、利用する認証プロファイル。
 - 既存DynamoDBのテーブル名またはARN、パーティションキー／ソートキーの名前と型、必要に応じてGSI。
 - 保存済みデータ1件の例と、対象車両／走行を識別する値。
 - ピットで見たい項目、送信周期、必要な更新間隔、想定閲覧人数。
 - URLを非告知で運用するか、共有トークンによるAPIの閲覧制限も必要か。
 
-CDKはPythonで記述するが、CDK CLIの実行にはNode.jsも必要になる。依存関係と実行手順はCDK実装時に固定・記録する。
+AWSの認証設定は手元だけで管理する。CDKはPythonで記述し、CLIの実行にはNode.jsも使用する。依存関係は`requirements*.txt`と`package-lock.json`で固定している。
 
 ## AWS公式資料
 
