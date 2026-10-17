@@ -1,6 +1,6 @@
 # Step 1: AWS配信基盤とヘルスチェック
 
-この手順はDev ContainerとIAMユーザーのアクセスキーによる認証を前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
+この手順はDev Containerと、IAMユーザーによる`aws login`の一時認証を前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
 
 ## 実装範囲
 
@@ -29,9 +29,9 @@ flowchart LR
 
 ## 認証情報の取り扱い
 
-アクセスキーID・シークレットアクセスキーは、ユーザー自身がコンテナ内のAWS CLIへ入力する。チャットやリポジトリには保存しない。AWSアカウントIDもコードに固定せず、デプロイ時にコンテナ内のAWS認証から解決する。
+ユーザー自身がホスト側のブラウザでIAMユーザーとして認証し、表示された認証コードをコンテナ内のAWS CLIへ入力する。長期アクセスキーは作成しない。パスワード・MFAコード・CLI認証コード・一時認証情報をチャットやリポジトリへ送らない。AWSアカウントIDもコードに固定せず、デプロイ時にコンテナ内のAWS認証から解決する。
 
-この手順ではProfile（認証情報と接続先に付ける名前）を`delta-deneb-dev`に統一する。Profileの設定、初回のbootstrap、diff、deployはユーザー自身がコンテナ内で実行する。
+この手順では専用IAMユーザーを`delta-deneb-deployer`、Profile（認証方法と接続先に付ける名前）を`delta-deneb-login`とする。以前のアクセスキーやSSOの設定が残るProfileを再利用せず、一時認証用のProfileを新しく作る。AWS操作はユーザー自身が実行する。
 
 ## 1. Dev Containerを開く
 
@@ -64,66 +64,78 @@ Python側の処理は、直接`uv run --locked python -m pytest`と`uv run --loc
 
 `synth:offline`はCDKアプリを直接実行し、AWSへの問い合わせや認証処理を行わず`cdk.out/`にテンプレートを生成する。`cdk.out/DeltaDenebDev.template.json`を確認できる。アカウント部分はCloudFormationの擬似パラメーターで解決し、ダミーのアカウントIDを埋め込まない。
 
-## 2. IAMユーザーのアクセスキーでProfileを設定する
+## 2. ブラウザ認証で一時認証用のProfileを設定する
 
-ここからのAWS操作はユーザーが実行する。ホストのAWS認証情報は自動マウントされないため、コンテナ内にProfileを設定する。この方式ではSSO Start URLやSSO registration scopesの入力は不要。
+ホストのAWS認証情報は自動マウントされないため、コンテナ内にProfileを設定する。`aws login`はAWS CLI 2.32.0以降で利用でき、用意したDev Containerの2.38.1は対応している。SSOのURLやregistration scopesは使わない。[AWS公式のブラウザ認証手順](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html)を参照。
 
-### 2-1. アクセスキーを用意する
+### 2-1. 専用IAMユーザーとMFAを設定する
 
-利用できるアクセスキーIDとシークレットアクセスキーを保管済みなら、手順2-2へ進む。新しく作成する場合は、ホスト側のブラウザでAWSコンソールを開く。
+ホスト側のブラウザで、IAMユーザーを管理できる既存の管理者としてAWSコンソールを開く。
 
-1. 「IAM」→「ユーザー」から、デプロイに使用する自分のIAMユーザーを選ぶ。
-2. 「セキュリティ認証情報」→「アクセスキー」→「アクセスキーを作成」を選ぶ。
-3. 用途は「コマンドラインインターフェイス（CLI）」を選び、画面の案内に従って作成する。
-4. アクセスキーIDとシークレットアクセスキーを安全な場所に保管する。シークレットアクセスキーを取得できるのは作成時のみ。
+1. 「IAM」→「ユーザー」→「ユーザーの作成」を開き、名前を`delta-deneb-deployer`にする。
+2. AWSマネジメントコンソールへのアクセスを有効にし、IAMユーザーとしてログインするためのパスワードを設定する。`aws login`ではブラウザでの認証にコンソールアクセスを使用する。
+3. 許可ポリシーとして`SignInLocalDevelopmentAccess`を付与する。既存の管理者ユーザーの権限をコピーしない。
+4. ユーザー作成後、「セキュリティ認証情報」→「多要素認証（MFA）」からMFAデバイスを割り当てる。パスキー・セキュリティキー、または認証アプリを使用する。
+5. 専用ユーザーのサインインURL・ユーザー名・パスワードを自分で保管する。アクセスキーは作成しない。
 
-詳しくは[AWS公式のIAMユーザー向け設定手順](https://docs.aws.amazon.com/cli/latest/userguide/cli-authentication-user.html)を参照。キーの作成権限がない場合は、AWSアカウントの管理者に確認する。
+`SignInLocalDevelopmentAccess`はCLIのブラウザ認証を許可するポリシーで、S3やLambdaを作成する権限は含まない。デプロイ権限は手順2-4で別に設定する。
 
-### 2-2. コンテナ内でProfileを作成する
+参考: [IAMユーザーの作成](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html)、[MFAの設定](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa_enable_virtual.html)、[SignInLocalDevelopmentAccessの権限](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SignInLocalDevelopmentAccess.html)。
+
+### 2-2. コンテナ内からログインする
 
 Dev Container内のターミナルで実行する。
 
 ```sh
-aws configure --profile delta-deneb-dev
+aws configure set region ap-northeast-1 --profile delta-deneb-login
+aws configure set output json --profile delta-deneb-login
+aws login --profile delta-deneb-login --remote
 ```
 
-対話形式の質問に、次を入力する。
-
-| 質問 | 入力する内容 |
-| --- | --- |
-| `AWS Access Key ID` | 用意したアクセスキーID |
-| `AWS Secret Access Key` | 用意したシークレットアクセスキー |
-| `Default region name` | `ap-northeast-1` |
-| `Default output format` | `json` |
-
-キーは対話形式の入力欄にだけ入力し、コマンドへ直接埋め込まない。`aws configure sso`を実行中なら`Ctrl+C`で中断し、上のコマンドから設定する。
+表示されたURLをホスト側のブラウザで開き、`delta-deneb-deployer`としてサインインする。管理者ユーザーのブラウザセッションが選ばれていないことを確認する。MFA認証後、ブラウザに表示された認証コードを、自分のコンテナ内ターミナルの入力欄へ貼り付ける。
 
 ### 2-3. Profileと接続先を確認する
 
 ```sh
 aws configure list-profiles
-aws sts get-caller-identity --profile delta-deneb-dev --query Account --output text
+aws sts get-caller-identity --profile delta-deneb-login
 ```
 
-一覧に`delta-deneb-dev`があり、表示されたアカウントIDがデプロイ先と一致することを確認する。結果をチャットへ貼り付ける必要はない。
+一覧に`delta-deneb-login`があり、`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。結果をチャットへ貼り付ける必要はない。この確認の成功は認証を確認するもので、デプロイ権限の確認は手順2-4で行う。
 
 アカウントIDは[AWSコンソール右上のアカウントメニューからも確認できる](https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html)。
 
-認証情報はコンテナ内の`~/.aws/credentials`、リージョン・出力形式は`~/.aws/config`に保存される。コンテナを停止・再開した場合はそのまま使えるが、作り直した場合は手順2-2から再設定する。ホストへのコピーや自動マウントは設定しない。
+Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login/cache/`に保存される。有効期限が切れたら同じ`aws login`を再実行する。コンテナを作り直した場合は手順2-2から再設定する。
+
+作業終了時にログアウトする場合:
+
+```sh
+aws logout --profile delta-deneb-login
+```
+
+### 2-4. 既存のCDKロールの権限を確認する
+
+対象アカウントのTokyoリージョンには、既に`CDKToolkit`スタックがある。この手順では既存スタックの再bootstrapや共有ロールの変更を行わない。
+
+ホスト側のブラウザで管理者として「CloudFormation」→Tokyoリージョン→`CDKToolkit`→「リソース」を開く。`CloudFormationExecutionRole`の物理IDからIAMロールを開き、付与された許可ポリシーと許可の境界を確認する。
+
+CDKの標準構成では、この実行ロールに`AdministratorAccess`が付く。専用ユーザーに管理者ポリシーを直接付けなくても、このロールを使ってデプロイできれば強い権限を利用できるため、ユーザーを分けただけではプロジェクト単位に権限を制限できない。
+
+管理者が次を確認・設定してから手順3へ進む。
+
+- CloudFormation実行ロールの権限または許可の境界が、delta-denebで許可する操作範囲を満たしていること。既存ロールを共有している場合は、専用のデプロイ基盤を分ける方法も検討する。
+- 専用ユーザーには、使用を認めるCDKのデプロイ・ファイル配布ロールなどへの`sts:AssumeRole`を、対象ロールのARNを指定して付与すること。
+- 権限の限定はユーザー側だけでなく、CDKが引き受けるロール側でも確認すること。
+
+具体的なポリシーは既存ロールの設定を確認して確定する。認証手順の整備だけで、デプロイ権限の制限が完了したとは扱わない。[AWS CDKのセキュリティ設定](https://docs.aws.amazon.com/cdk/v2/guide/best-practices-security.html)を参照。
 
 ## 3. コンテナ内からデプロイする
 
-デプロイ先のAWSアカウント・リージョンで初回のみ、CDK配布用のバケット・ロールなどを作成するbootstrapを実行する。コンテナを作り直しただけなら、bootstrapを繰り返す必要はない。
+手順2-4の権限設定が完了していることを前提に、差分を確認してからデプロイする。既存の`CDKToolkit`を使うため、ここでbootstrapは実行しない。
 
 ```sh
-npm run cdk -- bootstrap --profile delta-deneb-dev
-```
-
-差分を確認してからデプロイする。
-
-```sh
-npm run cdk -- diff DeltaDenebDev --profile delta-deneb-dev
-npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-dev --outputs-file cdk-outputs.dev.json
+npm run cdk -- diff DeltaDenebDev --profile delta-deneb-login
+npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-login --outputs-file cdk-outputs.dev.json
 ```
 
 CDKはIAMポリシーなどの差分を表示する。`--require-approval never`は設定していない。リージョンはコードでTokyoに固定している。

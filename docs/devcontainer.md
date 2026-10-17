@@ -46,27 +46,31 @@ npm ci
 
 ## AWSの認証情報
 
-このプロジェクトではIAMユーザーのアクセスキーで認証し、Profile名は`delta-deneb-dev`を使う。ホストの`~/.aws`、AWS認証用の環境変数、Dockerソケットをこの設定から自動で渡すことはない。初期化処理でもAWSの認証設定やデプロイは行わない。
+このプロジェクトではIAMユーザーのブラウザ認証から一時認証情報を取得し、Profile名は`delta-deneb-login`を使う。ホストの`~/.aws`、AWS認証用の環境変数、Dockerソケットをこの設定から自動で渡すことはない。初期化処理でもAWSの認証設定やデプロイは行わない。
 
-ユーザー自身がDev Container内のターミナルで実行する。
+管理者がコンソールログインとMFAを有効にした`delta-deneb-deployer`ユーザーを作成し、`SignInLocalDevelopmentAccess`ポリシーを付与する。詳しくは[Step 1の一時認証用Profileの設定手順](step1-deployment.md#2-ブラウザ認証で一時認証用のprofileを設定する)を参照。
+
+ユーザー自身がDev Container内のターミナルで実行する。長期アクセスキーの作成・入力は不要。
 
 ```sh
-aws configure --profile delta-deneb-dev
+aws configure set region ap-northeast-1 --profile delta-deneb-login
+aws configure set output json --profile delta-deneb-login
+aws login --profile delta-deneb-login --remote
 ```
 
-質問に従って、アクセスキーID・シークレットアクセスキー・リージョン`ap-northeast-1`・出力形式`json`を入力する。キーはチャットやリポジトリへ送らず、対話形式の入力欄に入力する。
+表示されたURLをホスト側のブラウザで開き、専用IAMユーザーで認証する。表示された認証コードを、自分のコンテナ内ターミナルへ入力する。パスワード・MFAコード・CLI認証コード・一時認証情報をチャットやリポジトリへ送らない。
 
 接続先を確認する。
 
 ```sh
-aws sts get-caller-identity --profile delta-deneb-dev --query Account --output text
+aws sts get-caller-identity --profile delta-deneb-login
 ```
 
-表示されたアカウントIDがデプロイ先と一致することを確認する。キーの取得方法と各入力項目は[Step 1のProfile設定手順](step1-deployment.md#2-iamユーザーのアクセスキーでprofileを設定する)を参照。
+`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。ログイン用ポリシーにはデプロイ権限は含まれないため、[既存CDKロールの権限確認](step1-deployment.md#2-4-既存のcdkロールの権限を確認する)も行う。
 
-認証情報はコンテナ内の`~/.aws/credentials`、リージョン・出力形式は`~/.aws/config`に保存される。コンテナを停止・再開した場合は維持されるが、作り直した場合は`aws configure --profile delta-deneb-dev`で再設定する。
+Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login/cache/`に保存される。有効期限が切れたら同じ`aws login`を再実行する。コンテナを作り直した場合はリージョン・出力形式の設定から再実行する。
 
-認証後のbootstrap・diff・deployは[Step 1のデプロイ手順](step1-deployment.md)を参照。
+作業終了時は`aws logout --profile delta-deneb-login`でログアウトできる。権限設定後のdiff・deployは[Step 1のデプロイ手順](step1-deployment.md)を参照。
 
 ## 確認状況
 
