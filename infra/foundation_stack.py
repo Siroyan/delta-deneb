@@ -129,6 +129,12 @@ class FoundationStack(Stack):
             prune=True,
             retain_on_delete=True,
         )
+        # BucketDeployment does not expose a layer name. Give its generated
+        # layer a stable name so the bootstrap can grant permissions to it only.
+        cli_layer = self.site_deployment.node.find_child("AwsCliLayer").node.default_child
+        if not isinstance(cli_layer, lambda_.CfnLayerVersion):
+            raise TypeError("Review BucketDeployment's AWS CLI layer before updating CDK")
+        cli_layer.layer_name = settings["deployment_layer_name"]
 
         site_url = f"https://{self.distribution.distribution_domain_name}"
         CfnOutput(self, "SiteUrl", value=f"{site_url}/")

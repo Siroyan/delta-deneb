@@ -85,6 +85,36 @@ def test_runtime_boundary_blocks_privilege_escalation_even_if_role_policy_is_bro
     assert not statements_with_action(statements, "dynamodb:Scan")
 
 
+@pytest.mark.parametrize("stage", ["dev", "prod"])
+def test_only_the_named_deployment_layer_can_be_published_read_and_deleted(stage):
+    template = build_template(yaml.safe_load(BASE_TEMPLATE.read_text()), stage=stage)
+    layer = f"arn:${{AWS::Partition}}:lambda:${{AWS::Region}}:${{AWS::AccountId}}:layer:delta-deneb-{stage}-site-deployment-awscli"
+    policies = [
+        policy(template, "CloudFormationExecutionBoundary"),
+        template["Resources"]["CloudFormationExecutionRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"],
+    ]
+    for statements in policies:
+        for action, resource in [
+            ("lambda:PublishLayerVersion", layer),
+            ("lambda:GetLayerVersion", f"{layer}:*"),
+            ("lambda:DeleteLayerVersion", f"{layer}:*"),
+        ]:
+            grants = [item for item in statements_with_action(statements, action) if item["Effect"] == "Allow"]
+            allowed = [value["Fn::Sub"] for grant in grants for value in grant["Resource"]]
+            assert resource in allowed
+            unrelated = [
+                layer.replace(f"delta-deneb-{stage}", "another-project"),
+                layer.replace(f"delta-deneb-{stage}", f"delta-deneb-{'prod' if stage == 'dev' else 'dev'}"),
+                f"{layer}-other",
+            ]
+            for candidate in unrelated:
+                if action != "lambda:PublishLayerVersion":
+                    candidate += ":1"
+                assert not any(fnmatch.fnmatchcase(candidate, pattern) for pattern in allowed)
+    runtime = policy(template, "ApplicationRuntimeBoundary")
+    assert not statements_with_action(runtime, "lambda:PublishLayerVersion")
+
+
 def test_cloudfront_distribution_mutations_require_project_and_stage_tags(bootstrap):
     statements = policy(bootstrap, "CloudFormationExecutionBoundary")
     for action in ["cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution"]:

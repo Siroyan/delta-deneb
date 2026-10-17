@@ -78,6 +78,8 @@ Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login
 
 専用bootstrap追加後はPython側34件・JavaScript側16件の全50件をコンテナ内で確認した。専用テンプレートの生成と`cfn-lint`による静的検証も成功している。
 
+2026-10-18の配布用Lambdaレイヤーの権限修正後は、同じARM64イメージから作成したコンテナでPython側37件とオフラインsynthが成功した。`dev`・`prod`の専用bootstrapテンプレートとアプリのテンプレートも静的検証した。アプリには既存のW3005警告があるため、その警告のみを除外した。
+
 確認にはリポジトリの共有マウントと専用の`node_modules/`ボリュームを使い、ホストのPython環境・Nodeパッケージと分離した。AWSへの接続・認証操作は行っていない。VS Codeでの接続操作とポート転送そのものは、この検証には含めていない。
 
 参考: [Dev ContainerのDockerfile設定](https://containers.dev/guide/dockerfile)、[uvとDocker](https://docs.astral.sh/uv/guides/integration/docker/)、[AWS CLI v2のインストール](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)。

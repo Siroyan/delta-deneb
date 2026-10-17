@@ -10,4 +10,5 @@ def deployment_settings(stage):
         "toolkit_name": f"DeltaDeneb{stage.title()}Toolkit",
         "runtime_boundary": f"delta-deneb-runtime-boundary-{stage}",
         "execution_boundary": f"delta-deneb-execution-boundary-{stage}",
+        "deployment_layer_name": f"delta-deneb-{stage}-site-deployment-awscli",
     }

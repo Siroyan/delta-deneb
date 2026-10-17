@@ -87,6 +87,7 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 - 新しいユーザーやアクセスキーは作成しない。手順2-1で作成済みの`delta-deneb-deployer`へ、専用ロールを引き受ける権限と対象スタック・バージョン情報の読み取り権限を付与する。
 - デプロイ操作は`delta-deneb-dev`スタックに限定する。専用ユーザーにbootstrap自体の更新権限は付与しない。配布ロールの信頼も、このユーザーに限定する。
 - CloudFormation実行ロールには`AdministratorAccess`を付けず、S3、Lambda、ログ、CloudFront、アプリ用IAMロールの管理に必要な許可を定義する。実行ロール自体にも同じ上限を付ける。
+- 静的ファイル配布用のLambdaレイヤーは`delta-deneb-dev-site-deployment-awscli`という専用名を使う。このレイヤーの公開・バージョンの読み取り・削除だけをCloudFormation実行ロールとその権限上限で許可する。以前のテンプレートで`lambda:PublishLayerVersion`の権限不足になった場合は、[Step 1の復旧手順](step1-deployment.md#3-1-lambdapublishlayerversionの権限不足で失敗した場合)に従って配布基盤を更新する。
 - アプリ用のIAMロールは`delta-deneb-dev-`で始まるものに限定し、必ずランタイム用の権限上限を付ける。アプリのコードからIAM管理・別ロールへの切り替えを許可せず、デプロイ経由で上限を削除・変更する操作も制限する。
 - S3、Lambda、ログは名前・アカウント・リージョンで対象を絞る。CloudFrontディストリビューションの更新・削除は`Project=delta-deneb`と`Environment=dev`のタグが付いたものに限定する。これらのタグの除去も禁止する。
 - 新規ディストリビューションの作成時にもタグ付け権限が必要なため、識別タグが未設定の既存ディストリビューションへ同じタグを付ける余地は残る。別のProjectやEnvironmentが設定済みのリソースを付け替える操作は許可しない。タグだけによる厳密な所有権分離を保証するものではない。

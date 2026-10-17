@@ -84,6 +84,7 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
     ]
     distribution = sub("arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*")
     version_arn = sub("arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${Qualifier}/version")
+    deployment_layer_arn = f"arn:${{AWS::Partition}}:lambda:{region_account}:layer:{settings['deployment_layer_name']}"
     resource_tags = {"aws:ResourceTag/Project": "delta-deneb", "aws:ResourceTag/Environment": stage}
     request_tags = {"aws:RequestTag/Project": "delta-deneb", "aws:RequestTag/Environment": stage}
     log_permissions = statement("ApplicationLogs", ["logs:*"], logs)
@@ -107,6 +108,7 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
         log_permissions,
         statement("DiscoverLogGroups", ["logs:DescribeLogGroups"], "*"),
         statement("ApplicationFunctions", ["lambda:*"], [sub(f"arn:${{AWS::Partition}}:lambda:{region_account}:function:{prefix}-*")]),
+        statement("DeploymentLayerVersions", ["lambda:PublishLayerVersion", "lambda:GetLayerVersion", "lambda:DeleteLayerVersion"], [sub(deployment_layer_arn), sub(f"{deployment_layer_arn}:*")]),
         statement("CreateTaggedDistribution", ["cloudfront:CreateDistribution"], "*", conditions={"StringEquals": request_tags}),
         statement("ManageTaggedDistribution", ["cloudfront:GetDistribution", "cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution", "cloudfront:ListTagsForResource"], [distribution], conditions={"StringEquals": resource_tags}),
         statement("TagNewDistribution", ["cloudfront:TagResource"], [distribution], conditions={"StringEquals": request_tags, "StringEqualsIfExists": resource_tags}),

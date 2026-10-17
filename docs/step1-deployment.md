@@ -262,6 +262,90 @@ CDKはIAMポリシーなどの差分を表示する。`--require-approval never`
 
 `cdk-outputs.dev.json`はリポジトリのルートに生成され、Git管理対象外。次の確認手順でもこのファイルを使う。実行時に使うプロファイルやアカウント情報をソースへ追記する必要はない。
 
+### 3-1. `lambda:PublishLayerVersion`の権限不足で失敗した場合
+
+以前の配布基盤テンプレートでは、静的ファイル配布用のLambdaレイヤーを作成する権限が不足していた。`DeploySiteAwsCliLayer...`の作成が`lambda:PublishLayerVersion`のAccessDeniedで失敗した場合は、アプリと配布基盤の両方を更新する。
+
+修正版はレイヤー名を`delta-deneb-dev-site-deployment-awscli`に固定し、そのレイヤーの公開・読み取り・削除だけをCloudFormation実行ロールに許可する。実行ロールのポリシーと権限の上限を同時に更新する必要があるため、専用ユーザーへのポリシーの手動追加では解決しない。
+
+1. Dev Container内で最新の修正と生成済みテンプレートを用意する。
+
+   ```sh
+   git pull --ff-only
+   uv sync --locked
+   npm ci
+   npm run prepare:bootstrap
+   npm run synth:offline
+   ```
+
+   独自のIAMユーザー名を使っている場合は、手順2-4-2と同じ`--deployer-user-name`を付けて生成する。
+
+2. 手順2-4-3の管理者Profileでログインし、`Arn`が管理者であることを確認する。
+
+   ```sh
+   aws login --profile delta-deneb-bootstrap --remote
+   aws sts get-caller-identity --profile delta-deneb-bootstrap
+   ```
+
+3. 手順2-4-4と同じコマンドで`DeltaDenebDevToolkit`を更新する。既存の配布基盤が更新されるため、新しいスタックやユーザーは不要。
+
+   ```sh
+   aws cloudformation deploy \
+     --template-file bootstrap.out/dev.template.json \
+     --stack-name DeltaDenebDevToolkit \
+     --capabilities CAPABILITY_NAMED_IAM \
+     --region ap-northeast-1 \
+     --profile delta-deneb-bootstrap \
+     --tags Project=delta-deneb Environment=dev
+
+   aws cloudformation describe-stacks \
+     --stack-name DeltaDenebDevToolkit \
+     --region ap-northeast-1 \
+     --profile delta-deneb-bootstrap \
+     --query 'Stacks[0].StackStatus' \
+     --output text
+   ```
+
+   `UPDATE_COMPLETE`を確認してから次へ進む。
+
+4. 管理者からログアウトし、専用ユーザーでアプリの現在の状態を確認する。
+
+   ```sh
+   aws logout --profile delta-deneb-bootstrap
+   aws sts get-caller-identity --profile delta-deneb-login
+   aws cloudformation describe-stacks \
+     --stack-name delta-deneb-dev \
+     --region ap-northeast-1 \
+     --profile delta-deneb-login \
+     --query 'Stacks[0].StackStatus' \
+     --output text
+   ```
+
+   認証期限が切れていた場合は、`aws login --profile delta-deneb-login --remote`で専用ユーザーとして再認証する。失敗したアプリスタックの状態によって、次の対応が変わる。
+
+   | アプリスタックの状態 | 次の対応 |
+   | --- | --- |
+   | `CREATE_FAILED` / `UPDATE_FAILED` | 修正後のテンプレートで、手順3のアプリデプロイを再実行する |
+   | `UPDATE_ROLLBACK_COMPLETE` | 手順3のアプリデプロイを再実行する |
+   | `ROLLBACK_COMPLETE` | 初回作成が取り消された状態。下記の手順で失敗したアプリスタックを削除してから、再作成する |
+   | `*_IN_PROGRESS` | 処理が終わるまで待ち、状態を再確認する |
+   | `ROLLBACK_FAILED` / `UPDATE_ROLLBACK_FAILED` / `DELETE_FAILED` | CloudFormationのイベントで失敗理由を確認し、復旧方法を判断する。削除や再デプロイを繰り返さない |
+
+   **`ROLLBACK_COMPLETE`の場合だけ**、以下で失敗したアプリスタックを削除する。確認画面で対象が`delta-deneb-dev`であることを確かめる。保持対象のサイト用S3バケットとログが既に作成されていた場合、それらは残り、再作成時には新しいリソースが作成される。既存の`CDKToolkit`や専用配布基盤`DeltaDenebDevToolkit`は削除対象に指定しない。
+
+   ```sh
+   npm run cdk -- destroy DeltaDenebDev --profile delta-deneb-login
+   ```
+
+5. アプリを再デプロイし、成功後に疎通を確認する。
+
+   ```sh
+   npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-login --outputs-file cdk-outputs.dev.json
+   uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json
+   ```
+
+参考: [Lambdaのアクションと対象リソース](https://docs.aws.amazon.com/service-authorization/latest/reference/list_lambda.html)、[CloudFormationで失敗した作成・更新の再開](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stack-failure-options.html)。
+
 ## 4. デプロイ結果の確認
 
 デプロイに使ったコンテナ内で、以下のスクリプトを実行する。Python標準ライブラリだけで動作し、AWS認証情報やAWS SDKを利用しない。
@@ -304,7 +388,9 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 - アカウント未指定のオフラインsynthが成功。Tokyo向けの18リソースを生成し、追加のコンテキスト問い合わせはない。
 - 固定済みのNode依存を、空の作業ディレクトリで`npm ci`によりインストールできることを確認。
 
-AWSへのbootstrap・diff・deployと実環境の疎通確認は未実行。上記の手順に従い、ユーザー自身がコンテナ内で実行する。デプロイ確認スクリプトのテストはHTTP応答を模擬しており、実AWSでの成功を示すものではない。
+2026-10-18に、配布用Lambdaレイヤーの権限不足を修正した。修正前に不足を再現するテストを追加し、修正後はコンテナ内でPython側37件とオフラインsynthが成功した。`dev`・`prod`の専用bootstrapテンプレートも再生成し、`cfn-lint 1.57.2`で静的検証が成功した。アプリ側も既存のW3005警告だけを除外して静的検証した。
+
+これらの開発側の検証ではAWSへのbootstrap・diff・deployは実行していない。修正版のAWS操作と実環境の疎通確認は、上記の手順に従いユーザー自身がコンテナ内で実行する。デプロイ確認スクリプトのテストはHTTP応答を模擬しており、実AWSでの成功を示すものではない。
 
 Step 1の実環境での完了条件は、`SiteUrl`でデモが開き、上記のデプロイ確認がすべて成功すること。
 

@@ -125,6 +125,13 @@ def test_deployment_updates_static_files_and_invalidates_cloudfront(foundation):
     assert props["DestinationBucketName"] == {"Ref": bucket_id}
 
 
+def test_deployment_layer_has_the_name_allowed_by_the_bootstrap(foundation):
+    layer_id, layer = only(foundation, "AWS::Lambda::LayerVersion")
+    assert layer["Properties"]["LayerName"] == "delta-deneb-dev-site-deployment-awscli"
+    functions = resources(foundation, "AWS::Lambda::Function").values()
+    assert any({"Ref": layer_id} in function["Properties"].get("Layers", []) for function in functions)
+
+
 def test_generated_resource_dependencies_have_no_cycles(foundation):
     objects = foundation["Resources"]
 
