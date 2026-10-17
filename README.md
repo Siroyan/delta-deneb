@@ -14,7 +14,14 @@ delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバ
 
 セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。認証情報はチャットやリポジトリへ渡さず、AWS操作は手元で実行する。
 
-準備済みの開発環境では、次のコマンドでAWSへ接続せずテストとテンプレート生成を実行できる。
+Python環境は[uv](https://docs.astral.sh/uv/getting-started/installation/)で管理する。uvとNode.js 22以降・npmを準備し、次のコマンドで依存関係を同期する。
+
+```sh
+uv sync --locked
+npm ci
+```
+
+PythonはLambdaと同じ3.13を使う。uvが必要なPythonと仮想環境を管理するため、環境の手動作成や有効化は不要。依存関係の同期後は、次のコマンドでAWSへ接続せずテストとテンプレート生成を実行できる。
 
 ```sh
 npm test
@@ -26,7 +33,7 @@ npm run synth:offline
 
 ```sh
 cd /Users/siroyan/workspace/delta-deneb
-python3 -m http.server 8080 --bind 127.0.0.1 --directory web
+uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web
 ```
 
 ブラウザで <http://127.0.0.1:8080/> を開く。`web/`がS3に配置する静的コンテンツのルートで、ビルド・外部CDN・追加ライブラリは不要。ES ModulesとコースJSONを読み込むため、`file://`ではなくHTTP経由で開く。
@@ -130,7 +137,7 @@ Step 1のコードと認証不要の検証を実装済み。AWSへのbootstrap�
 - ピットで見たい項目、送信周期、必要な更新間隔、想定閲覧人数。
 - URLを非告知で運用するか、共有トークンによるAPIの閲覧制限も必要か。
 
-AWSの認証設定は手元だけで管理する。CDKはPythonで記述し、CLIの実行にはNode.jsも使用する。依存関係は`requirements*.txt`と`package-lock.json`で固定している。
+AWSの認証設定は手元だけで管理する。CDKはPythonで記述し、CLIの実行にはNode.jsも使用する。Pythonの依存関係は`pyproject.toml`で定義し、`uv.lock`で固定する。Node.jsの依存関係は`package-lock.json`で固定する。
 
 ## AWS公式資料
 

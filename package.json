@@ -8,10 +8,10 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "test:infra": ".venv/bin/python -m pytest",
-    "synth:offline": ".venv/bin/python app.py",
+    "test:infra": "uv run --locked python -m pytest",
+    "synth:offline": "uv run --locked python app.py",
     "cdk": "cdk",
-    "preview": "python3 -m http.server 8080 --bind 127.0.0.1 --directory web"
+    "preview": "uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web"
   },
   "devDependencies": {
     "aws-cdk": "2.1145.0"

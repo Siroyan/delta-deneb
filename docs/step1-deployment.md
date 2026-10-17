@@ -33,18 +33,17 @@ AWSログイン、初回のbootstrap、diff、deployはユーザーのPCで実�
 
 ## 1. ローカルの準備
 
-必要環境はPython 3.12以降、Node.js 22以降とnpm。デプロイするPCにはAWS CLI v2と利用するAWS認証設定も必要。
+必要環境は[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 22以降とnpm。Python 3.13はuvが用意するため、事前インストールや仮想環境の手動作成は不要。デプロイするPCにはAWS CLI v2と利用するAWS認証設定も必要。
 
 ```sh
 cd /Users/siroyan/workspace/delta-deneb
 git switch codex/step1-aws-foundation
 
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+uv sync --locked
 npm ci
 ```
 
-Python 3.13などを利用する場合は、`python3.12`をそのコマンド名へ置き換える。依存バージョンは`requirements*.txt`と`package-lock.json`で固定している。
+`.python-version`でLambdaと同じPython 3.13を指定し、Pythonの依存関係は`pyproject.toml`と`uv.lock`で管理する。uvが内部で`.venv/`を作成・同期するが、手動で有効化する必要はない。`uv sync --locked`は開発用のpytestも導入し、ロックファイルと定義が一致しなければエラーにする。Node.jsの依存バージョンは`package-lock.json`で固定する。
 
 テストと認証不要のテンプレート生成:
 
@@ -53,6 +52,8 @@ npm test
 npm run test:infra
 npm run synth:offline
 ```
+
+Python側の処理は、直接`uv run --locked python -m pytest`と`uv run --locked python app.py`でも実行できる。CDK CLIからのアプリ起動も`uv run --locked`を使う。
 
 `synth:offline`はCDKアプリを直接実行し、AWSへの問い合わせや認証処理を行わず`cdk.out/`にテンプレートを生成する。`cdk.out/DeltaDenebDev.template.json`を確認できる。アカウント部分はCloudFormationの擬似パラメーターで解決し、ダミーのアカウントIDを埋め込まない。
 
@@ -104,7 +105,7 @@ CDKはIAMポリシーなどの差分を表示する。`--require-approval never`
 以下のスクリプトはPython標準ライブラリだけで動作し、AWS認証情報やAWS SDKを利用しない。
 
 ```sh
-python3 scripts/check_deployment.py --outputs cdk-outputs.dev.json
+uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json
 ```
 
 確認する内容:
@@ -135,6 +136,7 @@ python3 scripts/check_deployment.py --outputs cdk-outputs.dev.json
 2026-10-17に、認証なしで次を確認した。
 
 - Python側25件: ヘルスチェック、CDKの権限・キャッシュ・依存関係、配布パッケージ、デプロイ確認スクリプトのテストが成功。
+- `uv sync --locked`でPython 3.13の環境を構築し、`uv run --locked`でPython側テストとオフラインsynthが成功。
 - JavaScript側16件: 既存の模擬API・戦略パーサーのテストが成功。
 - アカウント未指定のオフラインsynthが成功。Tokyo向けの18リソースを生成し、追加のコンテキスト問い合わせはない。
 - 固定済みのNode依存を、空の作業ディレクトリで`npm ci`によりインストールできることを確認。
