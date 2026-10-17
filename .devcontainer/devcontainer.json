@@ -13,10 +13,14 @@
   ],
   "postCreateCommand": ["bash", ".devcontainer/post-create.sh"],
   "waitFor": "postCreateCommand",
-  "forwardPorts": [8080],
+  "forwardPorts": [8080, 8081],
   "portsAttributes": {
     "8080": {
       "label": "delta-deneb UI",
+      "onAutoForward": "notify"
+    },
+    "8081": {
+      "label": "delta-deneb API preview (synthetic)",
       "onAutoForward": "notify"
     }
   },

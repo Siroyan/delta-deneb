@@ -1,6 +1,6 @@
 # Dev Containerでの開発
 
-Step 1をデプロイ済みの場合は、[Step 2の更新手順](step2-deployment.md)に従ってブランチと依存関係を更新する。ホストへの追加ツールのインストールは不要。
+実データ画面の更新は[Step 3の手順](step3-deployment.md)を参照。Step 2を未デプロイの場合は、その文書内の案内に従って保存先とAPIを先に配布する。ホストへの追加ツールのインストールは不要。
 
 ## 開き方
 
@@ -21,10 +21,10 @@ Step 1をデプロイ済みの場合は、[Step 2の更新手順](step2-deployme
 npm test
 npm run test:infra
 npm run synth:offline
-npm run preview
+npm run preview:api
 ```
 
-`npm run preview`を起動したら、VS Codeの「ポート」から8080番を開く。通常はホストの <http://127.0.0.1:8080/> で表示できる。ホスト側の8080番が使用中なら、「ポート」に表示された転送先の番号を使う。停止はターミナルで`Ctrl+C`。
+`npm run preview:api`を起動したら、VS Codeの「ポート」から8081番を開き、<http://127.0.0.1:8081/#token=local-preview>を表示する。本番と同じ取得処理を、AWSに接続しない模擬HTTP APIで確認できる。従来のデモは`npm run preview`を使い、8080番の`/?demo=1`を開く。ポートが使用中なら「ポート」に表示された転送先の番号を使う。停止は`Ctrl+C`。
 
 テストと`synth:offline`はAWSへ接続せず、AWSの認証設定なしで使える。生成した`cdk.out/`はリポジトリ配下に保存される。
 
@@ -85,3 +85,5 @@ Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login
 確認にはリポジトリの共有マウントと専用の`node_modules/`ボリュームを使い、ホストのPython環境・Nodeパッケージと分離した。AWSへの接続・認証操作は行っていない。VS Codeでの接続操作とポート転送そのものは、この検証には含めていない。
 
 参考: [Dev ContainerのDockerfile設定](https://containers.dev/guide/dockerfile)、[uvとDocker](https://docs.astral.sh/uv/guides/integration/docker/)、[AWS CLI v2のインストール](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)。
+
+Step 3では同じARM64イメージでJavaScript 34件・Python 109件が成功し、AWSに接続しないsynthも確認した。模擬HTTP APIから実API用の画面を開き、共有リンク・過去の期間と走行候補・ラップ分析・GPS欠測・更新停止・通信エラーからの復旧・データなし・明示的デモの表示を確認した。delta-vegaの実機を含む確認は後日行う。

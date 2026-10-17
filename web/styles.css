@@ -194,3 +194,27 @@ body[data-view="analysis"] .course-panel { display: none; }
   .summary-detail-grid, .summary-estimates { margin-inline: 16px; }
   .summary-panel .estimate-note { margin-inline: 16px; }
 }
+/* Live data and archive controls retain the approved dashboard layout. */
+.session-controls > div { display: flex; align-items: center; gap: 10px; }
+.demo-badge[data-source="live"] { color: var(--green); background: var(--soft-green); border-color: #dbe7d5; }
+.history-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; padding: 12px 16px; margin: 0 0 14px; background: #fff; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; }
+.history-form label { display: flex; align-items: center; gap: 7px; color: #627260; }
+.history-form input { font: 11px var(--mono); color: var(--ink); background: #fff; border: 1px solid #dce2d9; border-radius: 5px; padding: 7px; max-width: 100%; }
+.history-form input:focus-visible { outline: 3px solid #85bca0; outline-offset: 2px; }
+.history-form select { font-size: 11px; padding: 6px 22px 6px 8px; max-width: 240px; }
+#history-feedback { font-size: 10px; color: var(--muted); }
+.status-pill[data-status="locked"], .status-pill[data-status="archived"], .status-pill[data-status="select-period"] { color: var(--muted); }
+.status-pill[data-status="unauthorized"] { color: var(--red); }
+#history-status { font-size: 9px; }
+.summary-detail-grid .summary-detail { min-width: 0; }
+#machine-label { font-size: 9px; white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+@media (max-width: 600px) {
+  .session-heading { flex-wrap: wrap; }
+  .session-controls { margin-top: 0; }
+  .history-form { align-items: flex-start; gap: 9px; padding: 12px; }
+  .history-form > .subtle-label { width: 100%; white-space: normal; }
+  .history-form label { flex-wrap: wrap; }
+  .history-form input { font-size: 10px; width: 165px; }
+  .history-form #archive-run-label { max-width: 100%; }
+  #history-feedback { width: 100%; }
+}

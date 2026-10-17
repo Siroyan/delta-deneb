@@ -23,9 +23,13 @@ export function receiveClock(ms) {
 }
 
 export function connectionState({ response, error, now = Date.now() }) {
+  if (error?.code === 'missing_token') return 'locked';
+  if (error?.status === 401) return 'unauthorized';
   if (error) return 'error';
   if (!response) return 'loading';
   if (!response.latest) return 'empty';
+  if (response.archived) return 'archived';
+  now += response.clock_offset_ms || 0;
   if (now - response.received_at_ms > STALE_MS) return 'stale';
   return response.phase === 'finished' ? 'finished' : 'live';
 }

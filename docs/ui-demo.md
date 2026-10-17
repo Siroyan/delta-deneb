@@ -17,6 +17,8 @@
 - `web/index.html`: 静的画面。
 - `web/styles.css`: PC／タブレット／スマートフォン向けレイアウト。
 - `web/app.js`: 自動更新、表示切り替え、ラップ分析、CSV保存。
+- `web/js/telemetry-api.js`: 実API、共有トークン、差分履歴、走行候補の分割。
+- `scripts/preview_api.py`: AWSに接続しないローカル模擬HTTP API。
 - `web/js/mock-api.js`: 非同期の模擬データ取得とシナリオ。
 - `web/js/format.js`: 欠測を含む値の表示、接続判定、参考値の算出。
 - `web/js/charts.js`: SVGコース図、速度グラフ、戦略区間の背景。
@@ -25,13 +27,13 @@
 - `web/assets/course.json`: もてぎの表示・経路投影用データ。
 - `web/assets/motegi_demo.json`: 読み込み確認用の戦略。
 
-`web/`の内容をそのまま静的オリジンに配置する。現在はAWS CDKによる配信基盤と、DynamoDB・IoTルール・取得APIも別途実装している。画面はこの模擬データのままで、実APIへの接続はStep 3で行う。
+`web/`の内容をそのまま静的オリジンに配置する。現在はAWS CDKによる配信基盤と、DynamoDB・IoTルール・取得APIも別途実装している。Step 3で実APIへの接続を実装済み。通常URLは共有リンクで実データを取得し、`?demo=1`を指定した場合だけブラウザ内の模擬データを使う。[Step 3の手順](step3-deployment.md)を参照。
 
 ## データの由来
 
 MQTT項目はローカルのdelta-vega-v2の`lib/vega_core/src/application/telemetry_json.cpp`を参照した。確認済み項目は`speed`、`average_speed`、`lap_number`、`total_time_ms`、`lap_time_ms`、`latitude`、`longitude`、`timestamp_ms`、`machine_id`、`memo`。
 
-模擬APIは中盤のLAP 4から始まり、時刻の経過とともに速度・距離・ラップを更新する。車両の実測値を表示するものではない。テスト用の目標は38:30、更新周期は3秒、更新停止判定は受信から10秒超。これらはデモ設定であり、実運用時に確定する。
+模擬APIは中盤のLAP 4から始まり、時刻の経過とともに速度・距離・ラップを更新する。車両の実測値を表示するものではない。テスト用の目標は38:30、更新周期は3秒、更新停止判定は受信から10秒超。目標は参考値。実APIでも更新周期3秒・更新停止10秒を使い、実運用の計測結果に合わせて調整する。
 
 `web/assets/course.json`は、delta-vega-v2の`assets/maps/motegi_oval_full/course.json`にある`segments`、`routes`、`landmarks`と座標変換から生成した。見やすい横向きの模式図へ回転・縮尺調整し、経路内距離・緯度経度を保持している。GPS由来の基準経路であり、測量済みのコース境界ではない。初周・中間周・最終周で経路長が異なる。
 

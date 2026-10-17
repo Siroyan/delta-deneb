@@ -52,15 +52,17 @@ export function drawSpeedChart(svg, samples, { targetSpeed = null, fromMs = null
   if (targetSpeed != null) svg.append(svgNode('line', { x1: padding.left, y1: y(targetSpeed), x2: width - padding.right, y2: y(targetSpeed), class: 'chart-target' }));
   // Null sensor readings break the path; they never become a zero speed sample.
   let started = false;
-  const path = visible.map(sample => {
+  const path = visible.map((sample, index) => {
     if (typeof sample.speed !== 'number' || !Number.isFinite(sample.speed)) { started = false; return ''; }
+    const previous = visible[index - 1];
+    if (previous && (sample.total_time_ms - previous.total_time_ms > 10000 || sample.total_time_ms < previous.total_time_ms)) started = false;
     const command = started ? 'L' : 'M';
     started = true;
     return `${command}${x(sample.total_time_ms).toFixed(2)},${y(sample.speed).toFixed(2)}`;
   }).join(' ');
   if (path) {
     const trace = svgNode('path', { d: path, class: 'chart-trace' });
-    trace.append(svgNode('title', {}, '模擬走行の速度推移'));
+    trace.append(svgNode('title', {}, '走行データの速度推移'));
     svg.append(trace);
     const latest = visible.at(-1);
     if (latest && typeof latest.speed === 'number' && Number.isFinite(latest.speed)) svg.append(svgNode('circle', { cx: x(latest.total_time_ms), cy: y(latest.speed), r: 3.2, fill: '#236b4f', stroke: '#fff', 'stroke-width': 1.4 }));
