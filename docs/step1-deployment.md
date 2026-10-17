@@ -113,25 +113,24 @@ Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login
 aws logout --profile delta-deneb-login
 ```
 
-### 2-4. 既存のCDKロールの権限を確認する
+### 2-4. CDKのデプロイ基盤と権限を準備する
 
-対象アカウントのTokyoリージョンには、既に`CDKToolkit`スタックがある。この手順では既存スタックの再bootstrapや共有ロールの変更を行わない。
+対象アカウントのTokyoリージョンには既に`CDKToolkit`があるが、ユーザーの確認ではリソースは`AWS::S3::Bucket`のみで、`CloudFormationExecutionRole`は存在しない。これは旧形式のbootstrapの構成と一致する。独自構成の可能性もあるため、旧形式と断定はしない。[旧形式と現行形式の違い](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-env.html)を参照。
 
-ホスト側のブラウザで管理者として「CloudFormation」→Tokyoリージョン→`CDKToolkit`→「リソース」を開く。`CloudFormationExecutionRole`の物理IDからIAMロールを開き、付与された許可ポリシーと許可の境界を確認する。
+既存のスタックとS3バケットは保持する。今回のCDKアプリは現行形式のbootstrapで用意されるIAMロール・配布バケット・SSMパラメーターなどを利用するため、このS3バケットだけの構成を、そのままデプロイ基盤として使えるとは扱わない。
 
-CDKの標準構成では、この実行ロールに`AdministratorAccess`が付く。専用ユーザーに管理者ポリシーを直接付けなくても、このロールを使ってデプロイできれば強い権限を利用できるため、ユーザーを分けただけではプロジェクト単位に権限を制限できない。
+次の準備が必要。手順2-1〜2-3の専用ユーザー作成と一時認証の設定は、先に実行できる。
 
-管理者が次を確認・設定してから手順3へ進む。
+1. 管理者がdelta-deneb用の現行形式のbootstrap構成を準備する。既存の`CDKToolkit`と名前が衝突しないよう、スタック名とqualifier（配布バケットやIAMロール名に使う識別子）を分ける。
+2. CloudFormation実行ロールの権限と必要な許可の境界を定義する。CDKの標準設定は`AdministratorAccess`なので、名前を分けるだけでは権限制限にならない。
+3. CDKアプリのsynthesizerにも同じqualifierを設定し、新しいデプロイ基盤を参照させる。
+4. 専用ユーザーには、使用を認めるCDKロールのARNを指定して`sts:AssumeRole`を付与する。
 
-- CloudFormation実行ロールの権限または許可の境界が、delta-denebで許可する操作範囲を満たしていること。既存ロールを共有している場合は、専用のデプロイ基盤を分ける方法も検討する。
-- 専用ユーザーには、使用を認めるCDKのデプロイ・ファイル配布ロールなどへの`sts:AssumeRole`を、対象ロールのARNを指定して付与すること。
-- 権限の限定はユーザー側だけでなく、CDKが引き受けるロール側でも確認すること。
-
-具体的なポリシーは既存ロールの設定を確認して確定する。認証手順の整備だけで、デプロイ権限の制限が完了したとは扱わない。[AWS CDKのセキュリティ設定](https://docs.aws.amazon.com/cdk/v2/guide/best-practices-security.html)を参照。
+専用bootstrapの設定、実行ロールのポリシー、CDKアプリのqualifier変更は未実装。この準備が完了するまで手順3は実行しない。認証手順の整備だけで、デプロイ権限の制限が完了したとは扱わない。[bootstrapのカスタマイズ](https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-customizing.html)と[AWS CDKのセキュリティ設定](https://docs.aws.amazon.com/cdk/v2/guide/best-practices-security.html)を参照。
 
 ## 3. コンテナ内からデプロイする
 
-手順2-4の権限設定が完了していることを前提に、差分を確認してからデプロイする。既存の`CDKToolkit`を使うため、ここでbootstrapは実行しない。
+手順2-4の専用bootstrapと権限設定、およびCDKアプリ側の対応が完了していることを前提に、差分を確認してからデプロイする。
 
 ```sh
 npm run cdk -- diff DeltaDenebDev --profile delta-deneb-login

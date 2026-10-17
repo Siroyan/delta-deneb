@@ -66,7 +66,7 @@ aws login --profile delta-deneb-login --remote
 aws sts get-caller-identity --profile delta-deneb-login
 ```
 
-`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。ログイン用ポリシーにはデプロイ権限は含まれないため、[既存CDKロールの権限確認](step1-deployment.md#2-4-既存のcdkロールの権限を確認する)も行う。
+`Account`がデプロイ先、`Arn`が`user/delta-deneb-deployer`で終わることを確認する。ログイン用ポリシーにはデプロイ権限は含まれないため、[CDKのデプロイ基盤と権限の準備](step1-deployment.md#2-4-cdkのデプロイ基盤と権限を準備する)も必要。既存の`CDKToolkit`はS3バケットのみで、専用の現行形式の基盤は準備前の状態。
 
 Profileはコンテナ内の`~/.aws/config`、一時認証情報は`~/.aws/login/cache/`に保存される。有効期限が切れたら同じ`aws login`を再実行する。コンテナを作り直した場合はリージョン・出力形式の設定から再実行する。
 

@@ -12,7 +12,7 @@ delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバ
 
 非公開S3、CloudFront標準URL、IAM認証のLambda Function URL、Pythonの`GET /api/health`、ログをCDKで定義している。Tokyo (`ap-northeast-1`) を使用し、アカウントID・認証情報をコードに固定しない。
 
-セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。専用IAMユーザーのブラウザ認証でProfile `delta-deneb-login`に一時認証情報を取得し、AWS操作はユーザー自身がDev Container内で実行する。デプロイ権限は既存CDKロールの設定を確認して限定する。認証情報はチャットやリポジトリへ渡さない。
+セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。専用IAMユーザーのブラウザ認証でProfile `delta-deneb-login`に一時認証情報を取得し、AWS操作はユーザー自身がDev Container内で実行する。既存の`CDKToolkit`はS3バケットのみのため、デプロイには専用bootstrapと実行ロールの権限設定・アプリ側の対応が別途必要。認証情報はチャットやリポジトリへ渡さない。
 
 開発はDev Containerを推奨する。DockerとVS CodeのDev Containers拡張を用意し、このリポジトリを開いて「Dev Containers: Reopen in Container」を実行する。Python 3.13・Node.js 24・npm・uv・AWS CLI v2がコンテナ内に入り、依存関係も初回起動時に自動で同期される。ローカルへのNode.js・npm・uv・Pythonの追加インストールは不要。
 
