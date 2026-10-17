@@ -1,5 +1,7 @@
 # Dev Containerでの開発
 
+Step 1をデプロイ済みの場合は、[Step 2の更新手順](step2-deployment.md)に従ってブランチと依存関係を更新する。ホストへの追加ツールのインストールは不要。
+
 ## 開き方
 
 ホスト側に必要なのは、起動済みのDocker環境（Docker Desktopなど）とVS Code・Dev Containers拡張。Python、Node.js、npm、uv、AWS CLIをホストへ追加する必要はない。

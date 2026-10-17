@@ -76,7 +76,7 @@ aws login --profile delta-deneb-login --remote
 aws sts get-caller-identity --profile delta-deneb-login
 npm run cdk -- diff DeltaDenebDev --profile delta-deneb-login
 npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-login --outputs-file cdk-outputs.dev.json
-uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json
+uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json --step 2
 ```
 
 ブラウザ認証で`delta-deneb-deployer`を選び、`Arn`でも確認する。デプロイ後は`SiteUrl`をホスト側のブラウザで開いて、画面の動作を確認する。
@@ -93,7 +93,7 @@ uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.jso
 - 新規ディストリビューションの作成時にもタグ付け権限が必要なため、識別タグが未設定の既存ディストリビューションへ同じタグを付ける余地は残る。別のProjectやEnvironmentが設定済みのリソースを付け替える操作は許可しない。タグだけによる厳密な所有権分離を保証するものではない。
 - **CloudFrontのキャッシュポリシー、オリジンリクエストポリシー、OACの一部APIは、AWSがリソース単位のIAM制限を提供していないため、該当する設定の作成・取得・更新・削除権限がアカウント全体に及ぶ。** 他のシステムが共有するこれらの設定へ影響する余地は残る。アカウント全体からの完全な分離を保証する構成ではない。ロググループ一覧とCloudFormationのテンプレート概要も、メタデータの読み取り権限が残る。
 
-この構成はStep 1のファイル配布とヘルスチェック向け。DynamoDBやIoTへのアクセス権限は含めない。Step 2以降で必要な権限を確認して追加する。
+Step 2のコードでは、専用DynamoDB・IoTルール・閲覧トークン用Secretの権限も追加する。管理者での更新と権限の詳細は[Step 2の配布基盤更新](step2-deployment.md#2-管理者で配布基盤の権限を更新する)を参照。アプリ用ロールの権限上限も同時に更新する。
 
 ## 検証状況と更新
 

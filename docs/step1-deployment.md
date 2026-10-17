@@ -1,5 +1,7 @@
 # Step 1: AWS配信基盤とヘルスチェック
 
+Step 1のデプロイと確認が済んでいる場合は、[Step 2の更新手順](step2-deployment.md)へ進む。Step 2のヘルスチェックは`step: 2`になるため、確認コマンドにも`--step 2`を指定する。
+
 この手順はDev Containerと、IAMユーザーによる`aws login`の一時認証を前提とする。すべてのコマンドは、コンテナ内のターミナルでリポジトリのルート`/workspaces/delta-deneb`から実行する。ホスト側ではDocker・VS Codeの起動とブラウザ操作を行う。
 
 ## 実装範囲

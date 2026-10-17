@@ -5,6 +5,7 @@ description = "Pit telemetry dashboard and AWS CDK infrastructure for delta-vega
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aws-cdk-lib==2.273.0",
+    "boto3>=1.40,<2",
     "constructs>=10.4.2,<11",
 ]
 

@@ -20,6 +20,26 @@ def statements_with_action(statements, action):
     return [item for item in statements if any(fnmatch.fnmatchcase(action.lower(), pattern.lower()) for pattern in item["Action"])]
 
 
+def resolved_policy(value, stage="dev"):
+    """IAM quotas apply after CloudFormation resolves intrinsic functions."""
+    if isinstance(value, list):
+        return [resolved_policy(item, stage) for item in value]
+    if isinstance(value, dict):
+        if "Fn::Sub" in value:
+            result = value["Fn::Sub"]
+            qualifier = "denebdev1" if stage == "dev" else "denebprd1"
+            for key, replacement in {
+                "AWS::Partition": "aws", "AWS::Region": "ap-northeast-1", "AWS::AccountId": "111122223333",
+                "Qualifier": qualifier,
+                "StagingBucket.Arn": f"arn:aws:s3:::cdk-{qualifier}-assets-111122223333-ap-northeast-1",
+            }.items():
+                result = result.replace("${" + key + "}", replacement)
+            assert "${" not in result
+            return result
+        return {key: resolved_policy(item, stage) for key, item in value.items()}
+    return value
+
+
 def test_bootstrap_never_creates_users_keys_or_administrator_access(bootstrap):
     assert "AdministratorAccess" not in json.dumps(bootstrap)
     assert not any(resource["Type"] in {"AWS::IAM::User", "AWS::IAM::AccessKey", "AWS::IAM::LoginProfile"} for resource in bootstrap["Resources"].values())
@@ -29,7 +49,7 @@ def test_bootstrap_never_creates_users_keys_or_administrator_access(bootstrap):
     assert bootstrap["Parameters"]["BootstrapVariant"]["AllowedValues"] == ["delta-deneb restricted bootstrap v1"]
     for resource in bootstrap["Resources"].values():
         if resource["Type"] == "AWS::IAM::ManagedPolicy":
-            assert len(json.dumps(resource["Properties"]["PolicyDocument"], separators=(",", ":"))) <= 6144
+            assert len(json.dumps(resolved_policy(resource["Properties"]["PolicyDocument"]), separators=(",", ":"))) <= 6144
 
 
 def test_bootstrap_roles_only_trust_the_named_user_and_do_not_trust_other_accounts(bootstrap):
@@ -134,9 +154,44 @@ def test_production_uses_different_resources_and_unreviewed_bootstrap_versions_f
     prod = build_template(base, stage="prod")
     assert prod["Parameters"]["Qualifier"]["Default"] == "denebprd1"
     assert "delta-deneb-dev-*" not in json.dumps(prod)
+    for resource in prod["Resources"].values():
+        if resource["Type"] == "AWS::IAM::ManagedPolicy":
+            assert len(json.dumps(resolved_policy(resource["Properties"]["PolicyDocument"], "prod"), separators=(",", ":"))) <= 6144
     assert base["Parameters"]["Qualifier"]["Default"] == "hnb659fds"
     base["Resources"]["CdkBootstrapVersion"]["Properties"]["Value"] = "999"
     with pytest.raises(ValueError, match="review"):
         build_template(base)
     with pytest.raises(ValueError):
         build_template(base, deployer_user_name="unexpected/path")
+
+
+def test_execution_boundary_compaction_preserves_every_permission(bootstrap):
+    def grants(statements):
+        result = {}
+        for item in statements:
+            scope = {key: value for key, value in item.items() if key not in {"Sid", "Action"}}
+            key = json.dumps(scope, sort_keys=True)
+            result.setdefault(key, set()).update(item["Action"])
+        return result
+
+    inline = bootstrap["Resources"]["CloudFormationExecutionRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+    assert grants(inline) == grants(policy(bootstrap, "CloudFormationExecutionBoundary"))
+
+
+def test_step2_runtime_and_provisioning_scopes_are_project_specific(bootstrap):
+    runtime = policy(bootstrap, "ApplicationRuntimeBoundary")
+    query, = statements_with_action(runtime, "dynamodb:Query")
+    assert "delta-deneb-dev-telemetry/index/by-machine-received-at" in json.dumps(query["Resource"])
+    assert query["Condition"] == {"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["delta_machine_alpha"]}}
+    write, = statements_with_action(runtime, "dynamodb:PutItem")
+    assert "delta-deneb-dev-telemetry" in json.dumps(write["Resource"])
+    assert not statements_with_action(runtime, "dynamodb:DeleteItem")
+    execution = policy(bootstrap, "CloudFormationExecutionBoundary")
+    for action, expected in [("iot:CreateTopicRule", "delta_deneb_dev_telemetry"),
+                             ("dynamodb:CreateTable", "delta-deneb-dev-telemetry"),
+                             ("secretsmanager:CreateSecret", "delta-deneb/dev/viewer-token-??????")]:
+        grant, = statements_with_action(execution, action)
+        assert expected in json.dumps(grant["Resource"]) and grant["Resource"] != "*"
+    passing = statements_with_action(execution, "iam:PassRole")
+    iot, = [item for item in passing if item["Condition"]["StringEquals"]["iam:PassedToService"] == "iot.amazonaws.com"]
+    assert "role/delta-deneb-dev-telemetry-ingest" in json.dumps(iot["Resource"])

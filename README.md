@@ -3,7 +3,7 @@
 delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバーがブラウザで確認するシステム。
 ログイン操作なしで共有URLから開き、走行中のデータと結果を自動更新する。
 
-2026-10-17時点で、静的UI・模擬APIと、Python CDKによるStep 1の配信基盤を実装。AWSへのデプロイ・実環境での確認は、ユーザーの手元で行う。
+Step 1の配信基盤はユーザーの手元でデプロイ・確認済み。Step 2の新しいDynamoDBとIoTルール、共有トークンで保護した取得APIを実装済み。AWSへのデプロイ・実環境での確認は、引き続きユーザー自身が行う。画面の実データ接続はStep 3。
 
 - リポジトリ: https://github.com/Siroyan/delta-deneb
 - コンテナ内の作業フォルダ: `/workspaces/delta-deneb`
@@ -13,6 +13,23 @@ delta-vegaがMQTTでAWSに送信した走行データを、ピットのメンバ
 非公開S3、CloudFront標準URL、IAM認証のLambda Function URL、Pythonの`GET /api/health`、ログをCDKで定義している。Tokyo (`ap-northeast-1`) を使用し、アカウントID・認証情報をコードに固定しない。
 
 セットアップからデプロイ、疎通確認までの手順は[Step 1のデプロイ手順](docs/step1-deployment.md)を参照。専用IAMユーザーのブラウザ認証でProfile `delta-deneb-login`に一時認証情報を取得し、AWS操作はユーザー自身がDev Container内で実行する。初回は[専用CDK配布基盤の準備](docs/bootstrap.md)を行う。既存の`CDKToolkit`を保持し、権限上限付きの専用基盤を管理者Profileで作成する設定とアプリ側の対応を実装済み。認証情報はチャットやリポジトリへ渡さない。
+
+## データ保存と取得API（Step 2）
+
+[Step 2のデプロイ手順](docs/step2-deployment.md)に従い、管理者で専用配布基盤の権限を更新してから、専用ユーザーで同じアプリスタックを更新する。
+
+- 新しい`delta-deneb-dev-telemetry`テーブルと専用IoTルールで、既存トピックのデータを保存する。AWS受信時刻とUUIDを追加し、機器の`timestamp_ms`と区別する。
+- 最新値・時刻範囲の履歴・推定ラップ情報を、同一オリジンの`/api/telemetry/*`から取得する。全件Scanは使わず、GSIへのQueryと件数・期間の上限を設ける。
+- 閲覧トークンはSecrets Managerで生成・保存し、APIは`X-Deneb-Token`ヘッダーを検証する。UIの共有リンクへの対応はStep 3で行う。
+- 新しいテーブルとSecretは保持する。既存のIoTルールや保存先は変更せず、過去データの自動移行は行わない。
+
+デプロイ後は、ユーザー自身のProfileで次を実行する。トークンは表示せず、メモリ内だけで使用する。
+
+```sh
+uv run --locked python scripts/check_telemetry.py --outputs cdk-outputs.dev.json --profile delta-deneb-login --require-data
+```
+
+## 開発環境
 
 開発はDev Containerを推奨する。DockerとVS CodeのDev Containers拡張を用意し、このリポジトリを開いて「Dev Containers: Reopen in Container」を実行する。Python 3.13・Node.js 24・npm・uv・AWS CLI v2がコンテナ内に入り、依存関係も初回起動時に自動で同期される。ローカルへのNode.js・npm・uv・Pythonの追加インストールは不要。
 
@@ -74,16 +91,16 @@ Node.jsで模擬APIと戦略パーサーのテストを実行できる。追加�
 node --test tests/*.test.js
 ```
 
-`latest`内の項目はdelta-vegaのMQTTフィールドに合わせている。ただし`timestamp_ms`は車載機の時計であり、UNIX時刻として表示しない。受信時刻の表示には別の`received_at_ms`を使用する。`phase`、ラップ履歴、表示用位置などはデモ用の補助情報で、Lambdaの実応答形式はまだ確定していない。
+`latest`内の項目はdelta-vegaのMQTTフィールドに合わせている。ただし`timestamp_ms`は車載機の時計であり、UNIX時刻として表示しない。受信時刻の表示には別の`received_at_ms`を使用する。`phase`、ラップ履歴、表示用位置などはデモ用の補助情報。実APIの契約と現在のMQTT項目から確定できない情報は、[Step 2のAPI仕様](docs/step2-deployment.md#保存形式と取得api)に記載する。
 
 ## 構成案
 
-以下は実データ接続まで含めた構成。Step 1では配信基盤とヘルスチェックを実装し、DynamoDBには接続しない。
+以下は実データ接続まで含めた構成。Step 2では新しい保存先と取得APIを追加し、Step 3で画面から接続する。
 
 ```mermaid
 flowchart LR
     Vega[delta-vega] -->|MQTT| IoT[AWS IoT Core]
-    IoT -->|既存ルール| DB[(既存DynamoDB)]
+    IoT -->|追加する専用ルール| DB[(新しいDynamoDB)]
     Pit[ピットのブラウザ] -->|HTTPS| CF[CloudFront]
     CF -->|画面・JS・CSS / OAC| S3[非公開S3バケット]
     CF -->|GET /api/* / OAC| URL[Lambda Function URL / AWS_IAM]
@@ -103,43 +120,32 @@ flowchart LR
 認証なしのCloudFront URLは、公開エンドポイントである。URLを案内した人はログインせず閲覧でき、転送先の人も閲覧できる。
 URLの非告知や検索除外だけでは、閲覧者を制限できない。
 
-共有リンクを持つ人だけにデータを制限する必要がある場合は、推測困難な共有トークンをリンクに付け、API側で検証する方式を検討する。
-その場合もリンク所有者へのアクセス許可であり、メンバー個人の認証にはならない。トークンの期限・失効・ログへの記録回避も一緒に設計する。
-初期の閲覧方式は、この違いを踏まえて決定する。
+実データAPIは推測困難な共有トークンで保護する。Step 2でAPI側の検証を実装し、Step 3で共有リンクのフラグメントからヘッダーへ渡す。リンク所有者へのアクセス許可であり、メンバー個人の認証にはならない。トークンの更新とキャッシュの扱いは[Step 2の手順](docs/step2-deployment.md#保持トークン更新費用)を参照。
 
-## 既存DynamoDBとの接続
+## DynamoDBの保存と読み取り
 
-既存テーブルのARNを参照し、Lambdaに必要な読み取り権限を与える。最初の段階ではテーブルやIoTルールの所有権をCDKへ移さない。
+Step 2では新規テーブルを作成する方針に変更した。主キーは車両IDとサンプルUUID、時刻順のGSIは車両IDとAWS受信時刻を使用する。最新値は逆順Query・Limit 1で取得し、履歴は範囲Queryとページ分割を使用する。GSIは結果整合性であり、受信直後は反映の遅延があり得る。
 
-最新データの取得方法は既存スキーマを確認して決める。
-
-- 車両／走行単位のパーティションキーと時刻順のソートキーがある場合は、逆順の`Query`と`Limit=1`で最新の1件を取得できる。
-- 最新状態を固定キーへ上書き保存している場合は、`GetItem`で取得する。
-- 最新取得に適したキーがない場合は、GSIや最新状態用の保存先を検討する。その変更は別途設計する。
-- テーブル全件の`Scan`を定期実行する方式は、通常の取得経路として採用しない。
-- 時刻の型、単位、タイムゾーン、送信時刻と受信時刻の区別を確認する。GSIを使う場合は結果整合性による遅延も考慮する。
-
-ブラウザから任意のテーブルやパーティションを指定できるAPIにはせず、対象の車両／走行と公開項目をサーバー側で制御する。
+ブラウザから任意のテーブルや車両を指定することはできない。現在のMQTTには走行ID・完走イベントがないため、走行の区切りとラップ時間は観測できるカウンターから推定し、不明なラップ時間は`null`、完走確認は`false`として返す。
 
 ## 3段階の実装
 
 | 段階 | 内容 | 完了条件 |
 | --- | --- | --- |
 | Step 1 | Python CDK、S3・CloudFront配信、Lambdaヘルスチェック | AWSのURLでデモ画面が開き、疎通とオリジンへの直接アクセス拒否を確認できる |
-| Step 2 | DynamoDBから最新値・履歴・ラップ情報を取得するAPI | 実際の走行データをAPIから取得できる |
+| Step 2 | 新しいDynamoDBとIoTルール、最新値・履歴・推定ラップ情報を取得するAPI | 実際の走行データをAPIから取得できる |
 | Step 3 | UIと実APIの接続、通信断復帰、実運用の検証 | delta-vegaからピット画面まで一連の動作を確認できる |
 
-Step 1のコードと認証不要の検証を実装済み。AWSへのbootstrap・diff・deployはユーザー自身がDev Container内で実行し、公開URLはホスト側のブラウザで確認する。`main`から`dev`、`dev`から`codex/step1-aws-foundation`を作成し、Step 1の変更を実装ブランチに分けている。
+Step 1はユーザーの手元で確認済み。`codex/step2-telemetry-api`は、そのStep 1の変更を含むブランチから作成している。AWSへの配布基盤更新・diff・deployと実データの確認は、ユーザー自身がDev Container内で実行する。
 
 初回の受け入れ条件は、共有URLからログイン操作なしで画面を開けること、delta-vegaの新しいデータが所定の間隔で表示されること、更新が止まったときに古いデータだと判断できること。
 更新間隔・停止判定の閾値・具体的な表示項目は未確定。
 
-## Step 2以降で確認する情報
+## 今後確認する情報
 
-- 既存DynamoDBのテーブル名またはARN、パーティションキー／ソートキーの名前と型、必要に応じてGSI。
-- 保存済みデータ1件の例と、対象車両／走行を識別する値。
-- ピットで見たい項目、送信周期、必要な更新間隔、想定閲覧人数。
-- URLを非告知で運用するか、共有トークンによるAPIの閲覧制限も必要か。
+- MQTTに走行ID・状態・確定ラップや完走・取消イベントを追加するか。
+- 実運用の送信周期・閲覧人数と、画面の更新間隔。
+- テレメトリーの保存期間と、過去の走行結果の選択方法。
 
 AWSの認証設定は手元だけで管理する。CDKはPythonで記述し、CLIの実行にはNode.jsも使用する。Pythonの依存関係は`pyproject.toml`で定義し、`uv.lock`で固定する。Node.jsの依存関係は`package-lock.json`で固定する。
 

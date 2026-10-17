@@ -35,6 +35,20 @@ def document(statements):
     return {"Version": "2012-10-17", "Statement": statements}
 
 
+def compact_document(statements):
+    """Merge only identical effect/resource/conditions; preserve permissions."""
+    merged = {}
+    for original in statements:
+        item = copy.deepcopy(original)
+        item.pop("Sid", None)
+        actions = item.pop("Action")
+        key = json.dumps(item, sort_keys=True)
+        if key not in merged:
+            merged[key] = item | {"Action": []}
+        merged[key]["Action"].extend(actions)
+    return document(list(merged.values()))
+
+
 def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deployer"):
     """Return an account-independent template; never read profiles or credentials."""
     if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", deployer_user_name):
@@ -85,6 +99,10 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
     distribution = sub("arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*")
     version_arn = sub("arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/${Qualifier}/version")
     deployment_layer_arn = f"arn:${{AWS::Partition}}:lambda:{region_account}:layer:{settings['deployment_layer_name']}"
+    table_arn = sub(f"arn:${{AWS::Partition}}:dynamodb:{region_account}:table/{settings['telemetry_table']}")
+    index_arn = sub(f"arn:${{AWS::Partition}}:dynamodb:{region_account}:table/{settings['telemetry_table']}/index/{settings['telemetry_index']}")
+    secret_arn = sub(f"arn:${{AWS::Partition}}:secretsmanager:{region_account}:secret:{settings['viewer_secret']}-??????")
+    rule_arn = sub(f"arn:${{AWS::Partition}}:iot:{region_account}:rule/{settings['iot_rule']}")
     resource_tags = {"aws:ResourceTag/Project": "delta-deneb", "aws:ResourceTag/Environment": stage}
     request_tags = {"aws:RequestTag/Project": "delta-deneb", "aws:RequestTag/Environment": stage}
     log_permissions = statement("ApplicationLogs", ["logs:*"], logs)
@@ -94,6 +112,9 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
         log_permissions,
         statement("ApplicationObjects", ["s3:Get*", "s3:List*", "s3:PutObject*", "s3:DeleteObject*", "s3:AbortMultipartUpload"], site),
         asset_reads,
+        statement("ReadTelemetry", ["dynamodb:Query"], [table_arn, index_arn], conditions={"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [settings["machine_id"]]}}),
+        statement("StoreTelemetry", ["dynamodb:PutItem"], [table_arn], conditions={"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [settings["machine_id"]]}}),
+        statement("ReadViewerToken", ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"], [secret_arn]),
         statement("InvalidateProjectDistribution", ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"], [distribution], conditions={"StringEquals": resource_tags}),
         statement("NoIdentityOrRoleEscalation", ["iam:*", "sts:*", "organizations:*", "account:*"], "*", effect="Deny"),
     ]
@@ -109,6 +130,10 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
         statement("DiscoverLogGroups", ["logs:DescribeLogGroups"], "*"),
         statement("ApplicationFunctions", ["lambda:*"], [sub(f"arn:${{AWS::Partition}}:lambda:{region_account}:function:{prefix}-*")]),
         statement("DeploymentLayerVersions", ["lambda:PublishLayerVersion", "lambda:GetLayerVersion", "lambda:DeleteLayerVersion"], [sub(deployment_layer_arn), sub(f"{deployment_layer_arn}:*")]),
+        statement("TelemetryTable", ["dynamodb:*"], [table_arn, index_arn]),
+        statement("TelemetryRule", ["iot:CreateTopicRule", "iot:GetTopicRule", "iot:ReplaceTopicRule", "iot:DeleteTopicRule", "iot:TagResource", "iot:UntagResource", "iot:ListTagsForResource"], [rule_arn]),
+        statement("ViewerToken", ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret", "secretsmanager:DeleteSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource"], [secret_arn]),
+        statement("GenerateViewerToken", ["secretsmanager:GetRandomPassword"], "*"),
         statement("CreateTaggedDistribution", ["cloudfront:CreateDistribution"], "*", conditions={"StringEquals": request_tags}),
         statement("ManageTaggedDistribution", ["cloudfront:GetDistribution", "cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution", "cloudfront:ListTagsForResource"], [distribution], conditions={"StringEquals": resource_tags}),
         statement("TagNewDistribution", ["cloudfront:TagResource"], [distribution], conditions={"StringEquals": request_tags, "StringEqualsIfExists": resource_tags}),
@@ -128,13 +153,14 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
         ], [role_arn]),
         statement("BasicLambdaExecutionPolicy", ["iam:AttachRolePolicy", "iam:DetachRolePolicy"], [role_arn], conditions={"ArnEquals": {"iam:PolicyARN": sub("arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")}}),
         statement("PassApplicationRolesToLambdaOnly", ["iam:PassRole"], [role_arn], conditions={"StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}}),
+        statement("PassTelemetryRoleToIoT", ["iam:PassRole"], [sub(f"arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/{prefix}-telemetry-ingest")], conditions={"StringEquals": {"iam:PassedToService": "iot.amazonaws.com"}}),
         statement("RequireRuntimeBoundary", ["iam:CreateRole", "iam:PutRolePermissionsBoundary"], "*", effect="Deny", conditions={"StringNotEquals": {"iam:PermissionsBoundary": runtime_boundary}}),
         statement("PreventBoundaryRemoval", ["iam:DeleteRolePermissionsBoundary", "iam:DeleteUserPermissionsBoundary"], "*", effect="Deny"),
         statement("PreventPolicyAndUserAdministration", ["iam:CreatePolicy*", "iam:DeletePolicy*", "iam:SetDefaultPolicyVersion", "iam:CreateUser", "iam:CreateAccessKey", "iam:PutUserPolicy", "iam:AttachUserPolicy", "sts:AssumeRole"], "*", effect="Deny"),
     ]
     resources["CloudFormationExecutionBoundary"] = {
         "Type": "AWS::IAM::ManagedPolicy",
-        "Properties": {"ManagedPolicyName": settings["execution_boundary"], "PolicyDocument": document(execution_statements)},
+        "Properties": {"ManagedPolicyName": settings["execution_boundary"], "PolicyDocument": compact_document(execution_statements)},
     }
     execution = resources["CloudFormationExecutionRole"]["Properties"]
     execution.pop("ManagedPolicyArns")
@@ -178,6 +204,7 @@ def build_template(base, *, stage="dev", deployer_user_name="delta-deneb-deploye
             "PolicyDocument": document([
                 statement("AssumeProjectRoles", ["sts:AssumeRole", "sts:TagSession"], [sub("${DeploymentActionRole.Arn}"), sub("${FilePublishingRole.Arn}"), sub("${LookupRole.Arn}")]),
                 reads, version_read,
+                statement("ReadViewerToken", ["secretsmanager:GetSecretValue"], [secret_arn]),
             ]),
         },
     }

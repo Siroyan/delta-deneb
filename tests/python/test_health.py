@@ -19,7 +19,7 @@ def test_health_identifies_service_without_exposing_request_or_environment(monke
     assert result["statusCode"] == 200
     body = json.loads(result["body"])
     assert body == {
-        "status": "ok", "service": "delta-deneb", "stage": "dev", "step": 1,
+        "status": "ok", "service": "delta-deneb", "stage": "dev", "step": 2,
         "timestamp": body["timestamp"],
     }
     assert datetime.fromisoformat(body["timestamp"]).tzinfo is not None

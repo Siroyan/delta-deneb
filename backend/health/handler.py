@@ -31,7 +31,7 @@ def handler(event, context):
             "status": "ok",
             "service": "delta-deneb",
             "stage": os.environ.get("STAGE", "dev"),
-            "step": 1,
+            "step": 2,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
