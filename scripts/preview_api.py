@@ -14,7 +14,7 @@ from backend.telemetry.model import current_run, lap_summaries
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "local-preview"
-SCENARIOS = {"live", "stale", "empty", "gps-missing", "error", "unauthorized"}
+SCENARIOS = {"live", "stale", "empty", "gps-missing", "error", "unauthorized", "lap-2", "lap-3-partial"}
 
 
 class PreviewData:
@@ -29,10 +29,16 @@ class PreviewData:
         now = int(time.time() * 1000)
         if self.scenario == "stale":
             now = self.started - 30000
+        current_start = self.started - 22 * 60000
+        elapsed = now - current_start
+        if self.scenario in {"lap-2", "lap-3-partial"}:
+            # Fixed counter snapshots for reproducing the lap-2 to lap-3 bug.
+            elapsed = 301000 if self.scenario == "lap-2" else 631000
+            current_start = now - elapsed
         result = []
         for name, start, elapsed, boot in [
             ("previous", self.started - 65 * 60000, 35 * 60000, 300000),
-            ("current", self.started - 22 * 60000, now - (self.started - 22 * 60000), 120000),
+            ("current", current_start, elapsed, 120000),
         ]:
             elapsed = max(0, elapsed // 1000 * 1000)
             times = list(range(0, elapsed + 1, 5000))
@@ -41,6 +47,9 @@ class PreviewData:
             for total in times:
                 lap = min(7, total // 300000 + 1)
                 lap_time = total - (lap - 1) * 300000
+                if name == "current" and self.scenario == "lap-3-partial" and total >= 300000:
+                    lap = 2 if total < 630000 else 3
+                    lap_time = total - (300000 if lap == 2 else 630000)
                 route = self.course["routes"]["first_lap" if lap == 1 else "final_lap" if lap == 7 else "regular_lap"]
                 distance = min(route["length_m"], lap_time / 300000 * route["length_m"])
                 points = route["points"]
@@ -115,10 +124,18 @@ def handler_class(data):
             samples = [item for item in samples if start <= item["received_at_ms"] <= end]
             common = {"from_ms": start, "to_ms": end, "invalid_items": 0, "fetched_at_ms": now}
             if url.path.endswith("/history"):
+                if data.scenario == "lap-3-partial":
+                    # The index has only the newest item available in this view.
+                    return self.send_json(200, common | {"history": samples[-1:], "next_cursor": None})
                 more = offset + limit < len(samples)
                 cursor = base64.urlsafe_b64encode(json.dumps({"from": start, "to": end, "offset": offset + limit}).encode()).decode() if more else None
                 return self.send_json(200, common | {"history": samples[offset:offset + limit], "next_cursor": cursor})
             run = current_run(samples)
+            if data.scenario == "lap-3-partial":
+                return self.send_json(200, common | {
+                    "laps": [{"lap": 2, "time_ms": None, "source": "inferred_transition"}],
+                    "latest": run[-1], "truncated": True, "finish_confirmed": False,
+                })
             return self.send_json(200, common | {"laps": lap_summaries(run), "latest": run[-1] if run else None, "truncated": False, "finish_confirmed": False})
     return Handler
 

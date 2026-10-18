@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createMockApi, pointAtDistance, routeForLap } from '../web/js/mock-api.js';
-import { connectionState, estimates, csvText } from '../web/js/format.js';
+import { connectionState, csvText } from '../web/js/format.js';
 
 const course = JSON.parse(await readFile(new URL('../web/assets/course.json', import.meta.url), 'utf8'));
 function setup() {
@@ -11,7 +11,7 @@ function setup() {
   return { api, now: () => time, tick: ms => { time += ms; } };
 }
 
-test('normal polling advances time, distance and history using the MQTT field names', async () => {
+test('normal polling advances time, position and history using the MQTT field names', async () => {
   const { api, now, tick } = setup();
   const initial = await api.getLatest();
   assert.equal(initial.latest.lap_number, 4);
@@ -21,7 +21,7 @@ test('normal polling advances time, distance and history using the MQTT field na
   tick(3000);
   const next = await api.getLatest();
   assert.equal(next.latest.total_time_ms - initial.latest.total_time_ms, 3000);
-  assert.ok(estimates(next, course).distance > estimates(initial, course).distance);
+  assert.notDeepEqual(next.position, initial.position);
   assert.ok(next.history.length > initial.history.length);
 });
 
@@ -67,7 +67,6 @@ test('API errors are rejected; empty data contains no fabricated readings', asyn
   assert.deepEqual(empty.history, []);
   assert.deepEqual(empty.laps, []);
   assert.equal(connectionState({ response: empty, now: now() }), 'empty');
-  assert.equal(estimates(empty, course), null);
 });
 
 test('finished state has seven completed laps and frozen total time, never future receipt dates', async () => {
@@ -79,8 +78,6 @@ test('finished state has seven completed laps and frozen total time, never futur
   assert.equal(finished.latest.total_time_ms, finished.laps.reduce((sum, lap) => sum + lap.time_ms, 0));
   assert.equal(connectionState({ response: finished, now: now() }), 'finished');
   assert.ok(finished.history.every(sample => sample.received_at_ms <= now()));
-  const progress = estimates(finished, course);
-  assert.ok(Math.abs(progress.progress - 100) < 1e-6);
   tick(6000);
   assert.equal((await api.getLatest()).latest.total_time_ms, finished.latest.total_time_ms);
 });
@@ -92,7 +89,6 @@ test('long gaps cross lap boundaries without overrunning the course', async () =
   assert.equal(finished.phase, 'finished');
   assert.equal(finished.laps.length, 7);
   assert.equal(finished.latest.lap_number, 7);
-  assert.ok(Math.abs(estimates(finished, course).distance - course.length_m) < .01);
 });
 
 test('aborted in-flight requests cannot deliver an obsolete result', async () => {

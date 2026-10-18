@@ -44,7 +44,8 @@ export function splitRuns(samples) {
 
 export function inferLaps(samples) {
   const laps = [];
-  let start = samples[0]?.lap_number === 1 ? 0 : null;
+  // Both counters share the race clock, so any observed lap gives its start.
+  let start = samples.length ? samples[0].total_time_ms - samples[0].lap_time_ms : null;
   for (let index = 1; index < samples.length; index++) {
     const before = samples[index - 1], after = samples[index];
     if (after.lap_number === before.lap_number) continue;
@@ -54,6 +55,15 @@ export function inferLaps(samples) {
     start = end;
   }
   return laps;
+}
+
+function mergeLaps(...sources) {
+  const merged = new Map();
+  for (const source of sources) for (const lap of source) {
+    // Partial index reads must not erase a duration already observed this run.
+    if (lap.time_ms !== null || !merged.has(lap.lap)) merged.set(lap.lap, lap);
+  }
+  return [...merged.values()].sort((a, b) => a.lap - b.lap);
 }
 
 export function snapshot(samples, course, { laps = null, archived = false, warnings = [], clockOffsetMs = 0, loadingHistory = false } = {}) {
@@ -162,18 +172,20 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
         }
       }, warnings);
       const key = `${generation}:${latest.lap_number}`;
+      let fetchedLaps = [];
       if (key !== lapKey) await background('laps', async () => {
         const result = await request('laps', { from_ms: start, to_ms: end }, signal);
         if (!Array.isArray(result.laps) || !result.laps.every(lap => Number.isInteger(lap.lap) && lap.lap >= 1 && lap.lap <= 7 && (lap.time_ms === null || (Number.isFinite(lap.time_ms) && lap.time_ms > 0)))) throw new ApiError('invalid_response');
         // An eventually consistent index may not yet include the lap transition.
         if (!result.latest || result.latest.lap_number !== latest.lap_number || Math.abs((result.latest.timestamp_ms - result.latest.total_time_ms) - (latest.timestamp_ms - latest.total_time_ms)) > 1000) throw new ApiError('index_pending');
-        laps = result.laps;
+        fetchedLaps = result.laps;
         lapsTruncated = !!result.truncated;
         lapKey = key;
       }, warnings);
       if (truncated || lapsTruncated) warnings.push('history_truncated');
       const samples = splitRuns([...history, latest]).at(-1) ?? [latest];
-      return snapshot(samples, course, { laps: lapKey === key ? laps : null, warnings, clockOffsetMs: offset, loadingHistory: !!pending });
+      laps = mergeLaps(laps, inferLaps(samples), fetchedLaps);
+      return snapshot(samples, course, { laps, warnings, clockOffsetMs: offset, loadingHistory: !!pending });
     },
 
     async getArchive({ from, to, signal } = {}) {

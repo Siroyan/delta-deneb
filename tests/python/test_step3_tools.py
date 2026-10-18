@@ -103,3 +103,18 @@ def test_preview_scenarios_and_recovery():
                     assert body["latest"]["latitude"] is not None
         assert get(base, "/__preview/state?scenario=unknown")[0] == 400
         assert get(base, "/api/telemetry/history?from_ms=invalid")[0] == 400
+
+
+def test_preview_can_reproduce_lap_two_to_three_with_partial_api_results():
+    with preview("lap-2") as base:
+        assert get(base, "/api/telemetry/latest")[2]["latest"]["lap_number"] == 2
+        assert get(base, "/api/telemetry/laps")[2]["laps"][0]["time_ms"] == 300000
+        get(base, "/__preview/state?scenario=lap-3-partial")
+        latest = get(base, "/api/telemetry/latest")[2]["latest"]
+        assert latest["lap_number"] == 3
+        assert latest["total_time_ms"] - latest["lap_time_ms"] == 630000
+        _, _, history = get(base, "/api/telemetry/history")
+        assert len(history["history"]) == 1
+        assert history["history"][0]["lap_number"] == 3
+        _, _, laps = get(base, "/api/telemetry/laps")
+        assert laps["truncated"] and laps["laps"][0]["time_ms"] is None

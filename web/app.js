@@ -1,5 +1,5 @@
-import { createMockApi, routeForLap } from './js/mock-api.js';
-import { decimal, duration, deltaDuration, receiveClock, connectionState, estimates, csvText, TARGET_MS, POLL_MS } from './js/format.js';
+import { createMockApi } from './js/mock-api.js';
+import { decimal, duration, deltaDuration, receiveClock, connectionState, csvText, TARGET_MS, POLL_MS } from './js/format.js';
 import { courseMapPoint, drawCourse, drawSpeedChart } from './js/charts.js';
 import { initializeStrategy } from './js/strategy-ui.js';
 import { ApiError, createTelemetryApi, readViewerToken, retryDelay, snapshot, toTokyoInput, fromTokyoInput } from './js/telemetry-api.js';
@@ -13,10 +13,7 @@ let timer;
 let controller;
 let requestVersion = 0;
 let chartRange = 300;
-let view = 'live';
-let selectedLap = 1;
 let previousStatus = '';
-let analysisSignature = '';
 let historySignature = '';
 let strategyUi;
 const demoMode = new URLSearchParams(location.search).get('demo') === '1';
@@ -45,7 +42,6 @@ function modeLabels() {
   setText('mode-label', demoMode ? 'DEMO' : archiveMode ? '過去データ' : '走行データ');
   setText('mode-description', demoMode ? '模擬データで動作中' : archiveMode ? '指定した期間の受信記録' : 'delta-vegaの受信データ');
   setText('session-caption', demoMode ? 'テスト走行' : archiveMode ? '過去の受信記録' : '最新の受信記録');
-  setText('live-view', archiveMode ? '走行記録' : 'ライブ');
   document.querySelector('.poll-note').textContent = archiveMode ? '過去の記録・自動更新なし' : '3秒ごとに自動更新';
   $('mode-label').dataset.source = demoMode ? 'demo' : 'live';
 }
@@ -66,7 +62,7 @@ function renderConnection() {
   if (state === 'locked') { message = '管理者から受け取った閲覧用の共有リンクを開いてください。'; kind = 'info'; }
   if (state === 'unauthorized') { message = 'この共有リンクは使用できません。管理者から新しいリンクを受け取って開いてください。'; kind = 'error'; }
   if (state === 'archived') { message = '過去の受信記録を表示しています。走行の区切りとラップタイムは推定です。完走の確定はできません。'; kind = 'info'; }
-  if (state === 'finished') { message = '模擬走行が終了しました。タイムとラップごとの走行を確認できます。'; kind = 'info'; }
+  if (state === 'finished') { message = '模擬走行が終了しました。タイムを確認できます。'; kind = 'info'; }
   if (response?.latest && !response.position && state === 'live') { message = response.latest.latitude == null ? 'GPS位置が取得できません。速度とタイムは引き続き更新しています。' : 'GPS位置がコースから離れています。速度とタイムは引き続き更新しています。'; kind = 'warning'; }
   if (!message && response?.warnings?.length) message = '履歴やラップの一部を取得できていません。取得済みの記録を表示しています。';
   $('notice').hidden = !message;
@@ -82,16 +78,6 @@ function renderMetrics() {
   setText('lap', data?.lap_number ?? '—');
   setText('elapsed', duration(data?.total_time_ms));
   setText('current-lap-time', duration(data?.lap_time_ms));
-  const estimate = estimates(response, course);
-  setText('distance', estimate ? `${decimal(estimate.distance / 1000, 2)} km` : '— km');
-  setText('finish-estimate', duration(estimate?.finishMs));
-  setText('target-delta', deltaDuration(estimate?.deltaMs));
-  $('target-delta').classList.toggle('late', estimate?.deltaMs > 0);
-  setText('progress-percent', estimate ? `${decimal(estimate.progress, 1)}%` : '—%');
-  setText('remaining-distance', estimate ? `残り ${decimal(estimate.remaining / 1000, 2)} km` : '残り — km');
-  $('progress-fill').style.width = `${estimate?.progress ?? 0}%`;
-  setText('target-average', `${decimal(course.length_m / TARGET_MS * 3600)} km/h`);
-  setText('received-time', receiveClock(data ? response.received_at_ms : null));
   setText('lap-note', data ? response.phase === 'finished' ? '全周回を完了' : archiveMode || stateIsOld() ? `${data.lap_number}周目の受信記録` : `${data.lap_number}周目を走行中` : '全7周の走行');
   setText('speed-note', data && data.speed == null ? '速度データが欠測しています' : response?.phase === 'finished' ? '走行終了' : '車輪センサーの計測値');
   const dots = Array.from({ length: 7 }, (_, index) => {
@@ -117,13 +103,11 @@ function renderMetrics() {
   $('gps-status').dataset.missing = data && !hasPosition ? 'true' : 'false';
   $('map-overlay').hidden = !!hasPosition;
   setText('map-overlay', data ? data.latitude == null ? 'GPS位置が取得できません' : 'コース上の位置を特定できません' : '走行データを待っています');
-  setText('machine-label', data?.machine_id ?? '—');
   setText('history-status', response?.loading_history ? '履歴を読み込み中' : response?.warnings?.includes('history_truncated') ? '履歴は一部のみ' : response?.warnings?.length ? '履歴を再取得中' : '');
   $('export-csv').disabled = !response?.history?.length;
 }
 
 function renderLaps() {
-  const focusedLabel = $('lap-rows').contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
   const completed = response?.laps ?? [];
   const data = response?.latest;
   const bestLap = completed.filter(lap => Number.isFinite(lap.time_ms) && lap.time_ms > 0).reduce((best, lap) => !best || lap.time_ms < best.time_ms ? lap : best, null)?.lap;
@@ -142,20 +126,10 @@ function renderLaps() {
     const diff = document.createElement('td');
     diff.textContent = Number.isFinite(lap?.time_ms) ? deltaDuration(lap.time_ms - lap.target_ms) : isCurrent ? archiveMode || stateIsOld() ? '記録時点' : '計測中' : '—';
     if (Number.isFinite(lap?.time_ms)) diff.className = lap.time_ms <= lap.target_ms ? 'delta-early' : 'delta-late';
-    const action = document.createElement('td');
-    if ((lap || isCurrent) && response.history.some(sample => sample.lap_number === number)) {
-      const button = document.createElement('button');
-      button.className = 'lap-arrow';
-      button.textContent = '↗';
-      button.setAttribute('aria-label', `ラップ${number}を分析`);
-      button.addEventListener('click', () => { selectedLap = number; setView('analysis'); });
-      action.append(button);
-    }
-    row.append(title, time, diff, action);
+    row.append(title, time, diff);
     rows.push(row);
   }
   $('lap-rows').replaceChildren(...rows);
-  if (focusedLabel) [...$('lap-rows').querySelectorAll('button')].find(button => button.getAttribute('aria-label') === focusedLabel)?.focus({ preventScroll: true });
   setText('laps-summary', demoMode ? `${completed.length} / 7 周完了` : `${completed.length} / 7 周（推定）`);
 }
 
@@ -173,49 +147,11 @@ function renderHistory() {
   $('chart-empty').hidden = samples.length > 0;
 }
 
-function renderAnalysis() {
-  if (view !== 'analysis') return;
-  const available = [...new Set((response?.history ?? []).map(sample => sample.lap_number))];
-  if (!available.includes(selectedLap)) selectedLap = available.at(-1) ?? 1;
-  const select = $('analysis-lap');
-  const signature = available.join(',');
-  if (analysisSignature !== signature) {
-    analysisSignature = signature;
-    select.replaceChildren(...available.map(number => { const option = document.createElement('option'); option.value = number; option.textContent = `LAP ${String(number).padStart(2, '0')}`; return option; }));
-  }
-  select.value = selectedLap;
-  select.disabled = available.length === 0;
-  const completeLap = response?.laps?.find(item => item.lap === selectedLap);
-  const current = response?.latest?.lap_number === selectedLap && response.phase !== 'finished';
-  const ms = completeLap?.time_ms ?? (current ? response.latest.lap_time_ms : null);
-  const route = routeForLap(course, selectedLap);
-  setText('analysis-time', duration(ms));
-  setText('analysis-average', completeLap && ms > 0 ? `${decimal(route.length_m / ms * 3600)} km/h` : '— km/h');
-  setText('analysis-delta', completeLap && Number.isFinite(ms) ? deltaDuration(ms - completeLap.target_ms) : '—');
-  const samples = (response?.history ?? []).filter(item => item.lap_number === selectedLap);
-  const width = Math.max(280, $('lap-chart').getBoundingClientRect().width);
-  drawSpeedChart($('lap-chart'), samples, { width, height: width < 560 ? 220 : 280, fromMs: samples[0]?.total_time_ms ?? 0, toMs: samples.at(-1)?.total_time_ms ?? 300000, relative: true, strategy: strategyUi?.getPlan(), course });
-  setText('analysis-note', !samples.length ? 'まだ分析できる走行データがありません。' : current && !archiveMode && !stateIsOld() ? '現在受信中のラップです。タイムとグラフは自動更新されます。' : `LAP ${String(selectedLap).padStart(2, '0')} / ${decimal(route.length_m / 1000, 2)} km。タイムは${demoMode ? '模擬データ' : '受信記録からの推定'}です。目標は表示用の参考値です。`);
-}
-
-function setView(next) {
-  view = next;
-  document.body.dataset.view = next;
-  $('live-view').classList.toggle('active', next === 'live');
-  $('analysis-view').classList.toggle('active', next === 'analysis');
-  $('live-view').setAttribute('aria-pressed', String(next === 'live'));
-  $('analysis-view').setAttribute('aria-pressed', String(next === 'analysis'));
-  $('lap-analysis').hidden = next !== 'analysis';
-  renderAnalysis();
-  strategyUi?.render(response);
-}
-
 function render() {
   renderConnection();
   renderMetrics();
   renderLaps();
   renderHistory();
-  renderAnalysis();
   strategyUi?.render(response);
 }
 
@@ -294,7 +230,6 @@ function changeDataView() {
   response = null;
   requestError = null;
   historySignature = '';
-  analysisSignature = '';
   modeLabels();
   if (archiveMode) {
     setText('history-feedback', '期間を指定して「記録を表示」を押してください。');
@@ -326,7 +261,7 @@ async function start() {
     $('history-form').addEventListener('submit', loadArchive);
     $('archive-run').addEventListener('change', () => {
       response = archiveSnapshots[Number($('archive-run').value)];
-      historySignature = ''; analysisSignature = ''; render();
+      historySignature = ''; render();
     });
     const end = Math.floor(Date.now() / 60000) * 60000;
     $('history-start').value = toTokyoInput(end - 3600000);
@@ -334,16 +269,13 @@ async function start() {
     window.addEventListener('hashchange', () => {
       if (demoMode || location.hash === '#main') return;
       stopRequests();
-      response = null; requestError = null; failures = 0; historySignature = ''; analysisSignature = '';
+      response = null; requestError = null; failures = 0; historySignature = '';
       archiveMode = false; $('data-view').value = 'live'; $('history-form').hidden = true;
       api = createTelemetryApi({ course, token: readViewerToken(location.hash) });
       document.querySelector('.brand').href = location.pathname + location.search + location.hash;
       modeLabels(); render(); poll();
     });
     document.querySelector('.skip-link').addEventListener('click', event => { event.preventDefault(); $('main').tabIndex = -1; $('main').focus(); });
-    $('live-view').addEventListener('click', () => setView('live'));
-    $('analysis-view').addEventListener('click', () => setView('analysis'));
-    $('analysis-lap').addEventListener('change', () => { selectedLap = Number($('analysis-lap').value); renderAnalysis(); });
     document.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => {
       chartRange = button.dataset.range === 'all' ? 'all' : Number(button.dataset.range);
       document.querySelectorAll('[data-range]').forEach(item => { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', String(item === button)); });
@@ -364,9 +296,8 @@ async function start() {
       catch { $('fullscreen').hidden = true; }
     });
     document.addEventListener('fullscreenchange', () => $('fullscreen').setAttribute('aria-label', document.fullscreenElement ? '全画面表示を終了' : '全画面表示'));
-    const resizeObserver = new ResizeObserver(() => { historySignature = ''; renderHistory(); renderAnalysis(); });
+    const resizeObserver = new ResizeObserver(() => { historySignature = ''; renderHistory(); });
     resizeObserver.observe($('speed-chart'));
-    resizeObserver.observe($('lap-chart'));
     setInterval(renderConnection, 1000);
     window.addEventListener('pagehide', stopRequests);
     window.addEventListener('pageshow', event => { if (event.persisted) poll(); });

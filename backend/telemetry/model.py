@@ -77,12 +77,13 @@ def lap_summaries(samples):
     """Infer completed laps from observed transitions; gaps stay unknown.
 
     The first sample of the next lap provides the previous lap's end on the
-    race clock: total_time_ms - lap_time_ms. Duration is returned only if the
-    start boundary is known. Corrections or skipped laps must not invent times.
+    race clock: total_time_ms - lap_time_ms. The first observed lap supplies
+    its own start the same way, even if earlier samples were not loaded.
+    Skipped laps must not invent times.
     """
     results = []
     previous = None
-    lap_start = 0 if samples and samples[0]["lap_number"] == 1 else None
+    lap_start = samples[0]["total_time_ms"] - samples[0]["lap_time_ms"] if samples else None
     for sample in samples:
         if previous is not None and sample["lap_number"] != previous["lap_number"]:
             end = sample["total_time_ms"] - sample["lap_time_ms"]

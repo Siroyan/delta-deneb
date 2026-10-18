@@ -15,7 +15,7 @@ function sample(id, { total = 1000, lap = 1, lapTime = total, received = NOW, up
 function json(body, status = 200, headers = {}) { return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } }); }
 
 function harness(initial, { pageSize = 1000 } = {}) {
-  const state = { items: initial, now: NOW, historyError: false, latestStatus: 200, calls: [] };
+  const state = { items: initial, now: NOW, historyError: false, lapError: false, lapPayload: null, latestStatus: 200, calls: [] };
   const fetchImpl = async (path, options) => {
     state.calls.push({ path, options });
     const url = new URL(path, 'https://example.test');
@@ -23,8 +23,9 @@ function harness(initial, { pageSize = 1000 } = {}) {
     const latest = values.at(-1) ?? null;
     if (url.pathname.endsWith('/latest')) return json({ latest, received_at_ms: latest?.received_at_ms ?? null, fetched_at_ms: state.now, invalid_items: 0 }, state.latestStatus);
     if (url.pathname.endsWith('/laps')) {
+      if (state.lapError) return json({}, 503);
       const run = splitRuns(values).at(-1) ?? [];
-      return json({ latest, laps: inferLaps(run), truncated: false, invalid_items: 0 });
+      return json({ latest, laps: state.lapPayload ?? inferLaps(run), truncated: state.lapPayload !== null, invalid_items: 0 });
     }
     if (state.historyError) return json({ error: { code: 'private-raw-error' } }, 503, { 'retry-after': '6' });
     const cursor = url.searchParams.get('cursor');
@@ -167,12 +168,69 @@ test('archival records split into separate inferred runs without polling live en
   assert.ok(state.calls.every(call => call.path.startsWith('/api/telemetry/history')));
 });
 
-test('unknown lap boundaries and final lap are never invented as completed times', () => {
+test('the first observed lap carries its own start boundary, even after lap 1', () => {
   const items = [sample('a', { lap: 3, total: 900000, lapTime: 1000 }), sample('b', { lap: 4, total: 1200000, lapTime: 1000 })];
-  assert.equal(inferLaps(items)[0].time_ms, null);
+  assert.equal(inferLaps(items)[0].time_ms, 300000);
   const value = snapshot(items, course);
   assert.equal(value.phase, 'running');
   assert.equal(value.laps.length, 1);
+});
+
+test('lap 2 to 3 keeps past times when the lap API returns a partial summary', async () => {
+  const { api, state } = harness([
+    sample('lap1', { total: 299000, received: NOW - 2000 }),
+    sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
+  ]);
+  assert.equal((await api.getLatest()).laps[0].time_ms, 300000);
+  state.now += 330000;
+  state.items.push(sample('lap3', { total: 631000, lap: 3, lapTime: 1000, received: state.now }));
+  state.lapPayload = [{ lap: 2, time_ms: null, source: 'inferred_transition' }];
+  const result = await api.getLatest();
+  assert.deepEqual(result.laps.map(({ lap, time_ms }) => [lap, time_ms]), [[1, 300000], [2, 330000]]);
+  assert.ok(result.warnings.includes('history_truncated'));
+});
+
+test('lap 2 to 3 keeps past times through history and lap API errors', async () => {
+  const { api, state } = harness([
+    sample('lap1', { total: 299000, received: NOW - 2000 }),
+    sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
+  ]);
+  await api.getLatest();
+  state.now += 330000;
+  state.items = [sample('lap3', { total: 631000, lap: 3, lapTime: 1000, received: state.now })];
+  state.historyError = true;
+  state.lapError = true;
+  const result = await api.getLatest();
+  assert.deepEqual(result.laps.map(({ lap, time_ms }) => [lap, time_ms]), [[1, 300000], [2, 330000]]);
+});
+
+test('known lap times survive cache eviction but clear on an actual new run', async () => {
+  const { api, state } = harness([
+    sample('lap1', { total: 299000, received: NOW - 2000 }),
+    sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
+  ]);
+  await api.getLatest();
+  state.now += 330000;
+  state.items = Array.from({ length: 10002 }, (_, index) => sample(`lap3-${index}`, {
+    total: 631000 + index, lap: 3, lapTime: 1000 + index, received: state.now + index,
+  }));
+  state.now += 10001;
+  state.lapPayload = [];
+  for (let poll = 0; poll < 4; poll++) await api.getLatest();
+  const capped = await api.getLatest();
+  assert.equal(capped.history.length, 10000);
+  assert.ok(capped.history.every(item => item.lap_number === 3));
+  assert.equal(capped.laps.find(item => item.lap === 1)?.time_ms, 300000);
+  state.now += 3000;
+  state.items = [sample('restart', { total: 1000, uptime: 10000, received: state.now })];
+  state.lapError = true;
+  assert.deepEqual((await api.getLatest()).laps, []);
+});
+
+test('skipped and unobserved laps stay unknown, including the final lap', () => {
+  const items = [sample('a', { lap: 3, total: 900000, lapTime: 1000 }), sample('b', { lap: 5, total: 1500000, lapTime: 1000 })];
+  assert.equal(inferLaps(items)[0].time_ms, null);
+  assert.deepEqual(inferLaps([sample('last', { lap: 7, total: 2100000, lapTime: 300000 })]), []);
 });
 
 test('real GPS loss keeps sensor missing values and does not fabricate map positions', () => {

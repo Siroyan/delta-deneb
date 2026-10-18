@@ -29,6 +29,7 @@
       <div class="session-controls">
         <div id="source-controls"><label class="scenario-label" for="data-view">表示する記録</label><select id="data-view"><option value="live">最新の走行</option><option value="archive">過去の期間</option></select></div>
         <div id="demo-controls" hidden><label class="scenario-label" for="scenario">デモシナリオ</label><select id="scenario"><option value="live">走行中</option><option value="stale">更新停止</option><option value="error">APIエラー</option><option value="gps-missing">GPS欠測</option><option value="empty">データなし</option><option value="finished">ゴール</option></select></div>
+        <div class="connection"><span id="connection-status" class="status-pill" data-status="loading" role="status"><i></i><span id="connection-label">接続中</span></span><span id="last-update" class="update-age">データを取得しています</span></div>
       </div>
     </section>
 
@@ -36,10 +37,6 @@
       <span class="subtle-label">期間を指定（日本時間・最大2時間）</span><label>開始<input id="history-start" type="datetime-local" required></label><label>終了<input id="history-end" type="datetime-local" required></label><button id="history-load" type="submit" class="outline-button">記録を表示</button><label id="archive-run-label" hidden>走行候補<select id="archive-run"></select></label><span id="history-feedback" role="status"></span>
     </form>
 
-    <div class="view-bar">
-      <nav class="view-tabs" aria-label="表示切り替え"><button id="live-view" class="view-tab active" aria-pressed="true">ライブ</button><button id="analysis-view" class="view-tab" aria-pressed="false">ラップ分析</button></nav>
-      <div class="connection"><span id="connection-status" class="status-pill" data-status="loading" role="status"><i></i><span id="connection-label">接続中</span></span><span id="last-update" class="update-age">データを取得しています</span></div>
-    </div>
     <div id="notice" class="notice" role="status" hidden></div>
 
     <section class="metrics" aria-label="現在の走行データ">
@@ -77,29 +74,12 @@
       <section class="panel laps-panel" aria-labelledby="laps-title">
         <div class="panel-header"><div><p class="eyebrow">LAP TIMING</p><h2 id="laps-title">ラップタイム</h2></div><span id="laps-summary" class="subtle-label">— / 7 周完了</span></div>
         <div class="lap-current-summary"><span>現在のラップタイム</span><strong id="current-lap-time">—:—</strong></div>
-        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th scope="col">参考目標との差</th><th scope="col"><span class="sr-only">分析</span></th></tr></thead><tbody id="lap-rows"></tbody></table></div>
-        <div class="laps-footer"><span class="best-mark"></span><span>最速ラップ</span><span class="table-hint">行を選択して分析 <span aria-hidden="true">↗</span></span></div>
+        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th scope="col">参考目標との差</th></tr></thead><tbody id="lap-rows"></tbody></table></div>
+        <div class="laps-footer"><span class="best-mark"></span><span>最速ラップ</span></div>
       </section>
 
-      <section class="panel summary-panel" aria-labelledby="summary-title">
-        <div class="panel-header"><div><p class="eyebrow">RACE PROGRESS</p><h2 id="summary-title">走行の進み具合</h2></div><span class="subtle-label">16.39 km</span></div>
-        <div class="progress-reading"><strong id="progress-percent">—<small>%</small></strong><span id="remaining-distance">残り — km</span></div><div class="progress-track"><div id="progress-fill"></div></div>
-        <div class="summary-estimates"><div><span>走行距離 <small>推定</small></span><strong id="distance">— km</strong></div><div><span>ゴール予測 <small>参考</small></span><strong id="finish-estimate">—:—</strong></div><div class="pace-cell"><span>参考目標との差</span><strong id="target-delta">—</strong></div></div>
-        <div class="summary-detail-grid">
-        <div class="summary-detail"><span>目標平均速度 <small>表示用の参考値</small></span><strong id="target-average">25.5 <small>km/h</small></strong></div>
-        <div class="summary-detail"><span>データ受信時刻</span><strong id="received-time">—:—:—</strong></div>
-        <div class="summary-detail"><span>車両</span><strong id="machine-label">—</strong></div>
-        </div>
-        <p class="estimate-note">距離・予測は参考値です。公式結果ではありません。</p>
-      </section>
       </div>
     </div>
-
-    <section id="lap-analysis" class="panel analysis-panel" aria-labelledby="analysis-title" hidden>
-      <div class="panel-header"><div><p class="eyebrow">LAP DETAIL</p><h2 id="analysis-title">ラップを比較する</h2></div><label class="analysis-select-label">表示ラップ<select id="analysis-lap" aria-label="分析するラップ"></select></label></div>
-      <div class="analysis-metrics"><div><span>ラップタイム</span><strong id="analysis-time">—:—</strong></div><div><span>平均速度</span><strong id="analysis-average">—<small> km/h</small></strong></div><div><span>参考目標との差</span><strong id="analysis-delta">—</strong></div></div>
-      <div class="chart-legend"><span><i class="legend-line"></i>選択ラップの速度</span><span class="chart-unit">km/h</span></div><div class="chart-wrap analysis-chart"><svg id="lap-chart" viewBox="0 0 1100 280" role="img" aria-label="選択したラップの速度グラフ"></svg></div><p id="analysis-note" class="estimate-note">完了したラップを選択すると、速度とタイムを確認できます。</p>
-    </section>
 
     <footer class="page-footer"><span><i class="footer-dot"></i>delta-deneb <span class="footer-divider">/</span> ピットのためのテレメトリー</span><div><span class="poll-note">3秒ごとに自動更新</span><button id="export-csv" class="text-button" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>CSVを保存</button></div></footer>
     <noscript><p class="notice">このモニターにはJavaScriptが必要です。</p></noscript>
