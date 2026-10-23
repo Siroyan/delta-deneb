@@ -1,0 +1,35 @@
+{
+  "name": "delta-deneb",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/delta-deneb,type=bind,consistency=cached",
+  "workspaceFolder": "/workspaces/delta-deneb",
+  "remoteUser": "vscode",
+  "init": true,
+  "mounts": [
+    "source=${devcontainerId}-node-modules,target=/workspaces/delta-deneb/node_modules,type=volume"
+  ],
+  "postCreateCommand": ["bash", ".devcontainer/post-create.sh"],
+  "waitFor": "postCreateCommand",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "delta-deneb UI",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"],
+      "settings": {
+        "python.defaultInterpreterPath": "/home/vscode/.venvs/delta-deneb/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestArgs": ["tests/python"]
+      }
+    }
+  }
+}

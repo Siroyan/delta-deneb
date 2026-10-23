@@ -1,0 +1,7 @@
+{
+  "app": "uv run --locked python app.py",
+  "toolkitStackName": "DeltaDenebDevToolkit",
+  "context": {
+    "stage": "dev"
+  }
+}

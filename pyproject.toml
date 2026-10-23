@@ -1,0 +1,22 @@
+[project]
+name = "delta-deneb"
+version = "0.1.0"
+description = "Pit telemetry dashboard and AWS CDK infrastructure for delta-vega"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "aws-cdk-lib==2.273.0",
+    "constructs>=10.4.2,<11",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "pyyaml>=6,<7",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+pythonpath = ["."]
