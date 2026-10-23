@@ -1,7 +1,7 @@
 import { parseStrategy, projectOnRoute, strategyCue, MAX_STRATEGY_BYTES } from './strategy.js';
 import { pointAtDistance } from './mock-api.js';
 import { courseMapPoint, svgNode } from './charts.js';
-import { decimal } from './format.js';
+import { decimal, duration } from './format.js';
 
 const STORAGE_KEY = 'delta-deneb.strategy.v1';
 const ENGINE = '#cb8542';
@@ -105,7 +105,7 @@ export function initializeStrategy({ course, getResponse, onChange }) {
       svg.append(svgNode('circle', { cx: x(current.s), cy: 43, r: 4, fill: '#236b4f', stroke: '#fff', 'stroke-width': 2 }));
       svg.append(svgNode('text', { x: x(current.s), y: 97, 'text-anchor': 'middle', 'font-size': 10, fill: '#236b4f' }, '現在位置'));
     }
-    $('strategy-route').textContent = `${lap.route_id} / ${decimal(route.length_m / 1000, 2)} km / ${lap.runs.length}区間`;
+    $('strategy-route').textContent = `${lap.route_id} / ${decimal(route.length_m / 1000, 2)} km / ${lap.runs.length}区間${plan.schema_version === 2 ? ` / 目標 ${duration(lap.lap_target_s * 1000)}` : ''}`;
     $('strategy-runs').replaceChildren(...lap.runs.map((run, index) => {
       const row = document.createElement('tr');
       for (const value of [String(index + 1).padStart(2, '0'), `${decimal(run.on_s_m, 1)} m`, `${decimal(run.off_s_m, 1)} m`, `${decimal(run.off_s_m - run.on_s_m, 1)} m`]) {
@@ -133,7 +133,7 @@ export function initializeStrategy({ course, getResponse, onChange }) {
     $('strategy-title').textContent = plan.plan_id;
     $('strategy-type').textContent = plan.plan_type === 'demo' ? 'PLAN DEMO' : 'PLAN RACE';
     $('strategy-type').dataset.type = plan.plan_type;
-    $('strategy-label').textContent = `${filename} · ${plan.laps.length}周 / ${plan.laps.reduce((sum, lap) => sum + lap.runs.length, 0)}区間 · ブラウザ内に保存`;
+    $('strategy-label').textContent = `${filename}${plan.schema_version === 2 ? ` · 目標 ${duration(plan.total_target_s * 1000)}` : ''} · ${plan.laps.length}周 / ${plan.laps.reduce((sum, lap) => sum + lap.runs.length, 0)}区間 · ブラウザ内に保存`;
     const number = response?.latest?.lap_number ?? 1;
     const lap = plan.laps.find(item => item.lap === number);
     if (lap) drawMap(lap);

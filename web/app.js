@@ -1,7 +1,8 @@
 import { createMockApi } from './js/mock-api.js';
-import { decimal, duration, receiveClock, connectionState, csvText, TARGET_MS, POLL_MS } from './js/format.js';
+import { decimal, duration, deltaDuration, receiveClock, connectionState, csvText, POLL_MS } from './js/format.js';
 import { courseMapPoint, drawCourse, drawSpeedChart } from './js/charts.js';
 import { initializeStrategy } from './js/strategy-ui.js';
+import { strategyTargets } from './js/strategy-targets.js';
 import { ApiError, createTelemetryApi, readViewerToken, retryDelay, snapshot, toTokyoInput, fromTokyoInput } from './js/telemetry-api.js';
 
 const $ = id => document.getElementById(id);
@@ -82,6 +83,9 @@ function renderMetrics() {
   setText('average-speed', decimal(data?.average_speed));
   setText('lap', data?.lap_number || '—');
   setText('elapsed', duration(data?.total_time_ms));
+  const targets = strategyTargets(strategyUi?.getPlan());
+  setText('total-target-label', targets.explicit ? '戦略目標' : '参考目標');
+  setText('total-target', duration(targets.total_ms));
   setText('current-lap-time', response?.phase === 'waiting' ? '—:—' : duration(data?.lap_time_ms));
   setText('lap-note', data ? response.phase === 'waiting' ? '計測開始を待っています' : response.phase === 'finished' ? `${data.lap_number}周を完了` : archiveMode || stateIsOld() ? `${data.lap_number}周目の受信記録` : `${data.lap_number}周目を走行中` : '走行データを待っています');
   setText('speed-note', data && data.speed == null ? '速度データが欠測しています' : response?.phase === 'finished' ? '走行終了' : '車輪センサーの計測値');
@@ -111,6 +115,9 @@ function renderLaps() {
   const completed = response?.laps ?? [];
   const data = response?.latest;
   const bestLap = completed.filter(lap => Number.isFinite(lap.time_ms) && lap.time_ms >= 0).reduce((best, lap) => !best || lap.time_ms < best.time_ms ? lap : best, null)?.lap;
+  const plan = strategyUi?.getPlan();
+  const showTargets = strategyTargets(plan).explicit;
+  $('lap-target-heading').hidden = !showTargets;
   const rows = [];
   for (let number = 1; number <= (data?.lap_number ?? 0); number++) {
     const lap = completed.find(item => item.lap === number);
@@ -125,13 +132,28 @@ function renderLaps() {
     if (lap && bestLap === number) { const best = document.createElement('span'); best.className = 'best-mark'; best.title = '最速ラップ'; best.setAttribute('aria-label', '最速ラップ'); time.append(best); }
     const diff = document.createElement('td');
     diff.textContent = lap ? '車両確定' : isCurrent ? archiveMode || stateIsOld() ? '記録時点' : '計測中' : '未取得';
-    row.append(title, time, diff);
+    const target = document.createElement('td');
+    target.className = 'lap-target';
+    target.hidden = !showTargets;
+    const targetMs = strategyTargets(plan, number).lap_ms;
+    target.textContent = duration(targetMs);
+    const actual = lap?.time_ms ?? (isCurrent ? data.lap_time_ms : null);
+    // Compare a completed duration, or flag an overrun already observed on the
+    // current lap. A partial lap below target is not an early finish.
+    if (targetMs !== null && actual !== null && (lap || actual > targetMs)) {
+      const delta = document.createElement('small');
+      delta.className = actual > targetMs ? 'delta-late' : 'delta-early';
+      delta.textContent = deltaDuration(actual - targetMs);
+      delta.title = lap ? '確定タイムと目標の差' : '受信時点での目標超過';
+      target.append(delta);
+    }
+    row.append(title, time, target, diff);
     rows.push(row);
   }
   if (!rows.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 3;
+    cell.colSpan = showTargets ? 4 : 3;
     cell.textContent = data ? '確定ラップはまだありません' : '走行データを待っています';
     row.append(cell); rows.push(row);
   }
@@ -143,13 +165,15 @@ function renderHistory() {
   const samples = response?.history ?? [];
   const end = response?.latest?.total_time_ms ?? 300000;
   const start = chartRange === 'all' ? 0 : Math.max(0, end - chartRange * 1000);
-  const signature = `${samples.length}-${end}-${chartRange}-${samples.at(-1)?.speed}-${samples[0]?.sample_id}`;
+  const targets = strategyTargets(strategyUi?.getPlan());
+  setText('chart-target-label', targets.explicit ? '戦略目標の平均速度' : '参考目標の平均速度');
+  const signature = `${samples.length}-${end}-${chartRange}-${samples.at(-1)?.speed}-${samples[0]?.sample_id}-${targets.total_ms}`;
   if (historySignature === signature) return;
   historySignature = signature;
   const bounds = $('speed-chart').getBoundingClientRect();
   const width = Math.max(220, bounds.width);
   const height = Math.max(110, bounds.height || 125);
-  drawSpeedChart($('speed-chart'), samples, { targetSpeed: course.length_m / TARGET_MS * 3600, fromMs: start, toMs: end, width, height, strategy: strategyUi?.getPlan(), course });
+  drawSpeedChart($('speed-chart'), samples, { targetSpeed: course.length_m / targets.total_ms * 3600, fromMs: start, toMs: end, width, height, strategy: strategyUi?.getPlan(), course });
   $('chart-empty').hidden = samples.length > 0;
 }
 

@@ -1,4 +1,4 @@
-// Schema 1, matching delta-vega-v2/lib/vega_core/src/domain/strategy.cpp.
+// Schemas 1 and 2, matching delta-vega-v2/lib/vega_core/src/domain/strategy.cpp.
 export const MAX_STRATEGY_BYTES = 4096;
 
 // Retain duplicate keys for validation; JSON.parse would discard them.
@@ -67,9 +67,15 @@ export function parseStrategy(text, course) {
   function exactKeys(object, keys, label) {
     if (!object || Array.isArray(object) || typeof object !== 'object' || Object.keys(object).length !== keys.length || !keys.every(key => Object.hasOwn(object, key))) throw new Error(`${label}の項目は ${keys.join(' / ')} のみ指定してください。`);
   }
-  const legacy = plan?.plan_id === 'dummy-race-001' && !Object.hasOwn(plan, 'plan_type');
-  exactKeys(plan, legacy ? ['schema_version', 'course_id', 'plan_id', 'laps'] : ['schema_version', 'course_id', 'plan_id', 'plan_type', 'laps'], 'トップ階層');
-  if (plan.schema_version !== 1) throw new Error('schema_version は1のみ対応しています。');
+  if (![1, 2].includes(plan?.schema_version)) throw new Error('schema_version は1または2にしてください。');
+  const explicitTargets = plan.schema_version === 2;
+  const legacy = plan.schema_version === 1 && plan.plan_id === 'dummy-race-001' && !Object.hasOwn(plan, 'plan_type');
+  const keys = ['schema_version', 'course_id', 'plan_id', ...(legacy ? [] : ['plan_type']), ...(explicitTargets ? ['total_target_s'] : []), 'laps'];
+  exactKeys(plan, keys, 'トップ階層');
+  function checkTarget(seconds, label) {
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400) throw new Error(`${label} は1〜86400秒の整数にしてください。`);
+  }
+  if (explicitTargets) checkTarget(plan.total_target_s, 'total_target_s');
   if (plan.course_id !== course.id) throw new Error(`コースIDが一致しません。この画面のコースは ${course.id} です。`);
   if (typeof plan.course_id !== 'string' || plan.course_id.length > 47) throw new Error('course_id は47文字以内にしてください。');
   if (typeof plan.plan_id !== 'string' || !/^[A-Za-z0-9_.-]{1,39}$/.test(plan.plan_id)) throw new Error('plan_id は39文字以内の英数字・_・-・.で指定してください。');
@@ -78,12 +84,13 @@ export function parseStrategy(text, course) {
   if (!Array.isArray(plan.laps) || plan.laps.length !== course.lap_count || course.lap_count > 7) throw new Error(`全${course.lap_count}周の定義が必要です。戦略は最大7周まで対応しています。`);
   const seen = new Set();
   for (const lap of plan.laps) {
-    exactKeys(lap, ['lap', 'route_id', 'runs'], '各周');
+    exactKeys(lap, ['lap', 'route_id', ...(explicitTargets ? ['lap_target_s'] : []), 'runs'], '各周');
+    if (explicitTargets) checkTarget(lap.lap_target_s, `LAP ${lap.lap}: lap_target_s`);
     if (!Number.isInteger(lap.lap) || lap.lap < 1 || lap.lap > course.lap_count || seen.has(lap.lap)) throw new Error('周回番号が範囲外、または重複しています。');
     seen.add(lap.lap);
     const expected = lap.lap === 1 ? 'first_lap' : lap.lap === course.lap_count ? 'final_lap' : 'regular_lap';
     if (lap.route_id !== expected) throw new Error(`LAP ${lap.lap}: route_id は${expected}にしてください。`);
-    if (!Array.isArray(lap.runs) || lap.runs.length < 1 || lap.runs.length > 3) throw new Error(`LAP ${lap.lap}: ON/OFF区間は1〜3件にしてください。`);
+    if (!Array.isArray(lap.runs) || lap.runs.length < 1) throw new Error(`LAP ${lap.lap}: ON/OFF区間は1件以上にしてください。`);
     let previousOff = -1;
     for (const [runIndex, run] of lap.runs.entries()) {
       exactKeys(run, ['on_s_m', 'off_s_m'], `LAP ${lap.lap} 区間${runIndex + 1}`);
