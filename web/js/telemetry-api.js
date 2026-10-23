@@ -90,8 +90,9 @@ function sampleIsValid(sample) {
 }
 
 export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch, now = Date.now, timeoutMs = 10000 }) {
-  let history = [], latest = null, laps = [], lapKey = null, generation = 0, lapsTruncated = false;
+  let history = [], latest = null, laps = [], serverLaps = [], lapKey = null, generation = 0, lapsTruncated = false;
   let pending = null, syncedTo = null, truncated = false, offset = 0;
+  let latestMissing = false, historyBusy = false, detailsTask = null, detailsController = null;
   const retry = { history: { at: 0, failures: 0 }, laps: { at: 0, failures: 0 } };
 
   async function request(path, params, signal) {
@@ -129,17 +130,38 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
     if (!Array.isArray(items) || !items.every(sampleIsValid)) throw new ApiError('invalid_response');
   }
 
-  async function background(channel, action, warnings) {
-    if (now() < retry[channel].at) { warnings.push(`${channel}_unavailable`); return; }
+  function rememberSamples(items) {
+    const all = splitRuns([...history, ...items, latest]).at(-1) ?? [];
+    laps = mergeLaps(laps, inferLaps(all));
+    truncated ||= all.length > MAX_SAMPLES;
+    history = all.slice(-MAX_SAMPLES);
+  }
+
+  function currentSnapshot() {
+    const warnings = [];
+    if (latestMissing) warnings.push('latest_unavailable');
+    for (const channel of ['history', 'laps']) if (retry[channel].failures) warnings.push(`${channel}_unavailable`);
+    if (truncated || lapsTruncated) warnings.push('history_truncated');
+    laps = mergeLaps(laps, inferLaps(history), serverLaps);
+    return snapshot(history, course, {
+      laps, warnings, clockOffsetMs: offset,
+      loadingHistory: !!latest && !retry.history.failures && (historyBusy || !!pending || syncedTo === null),
+    });
+  }
+
+  async function background(channel, action, ensureCurrent) {
+    ensureCurrent();
+    if (now() < retry[channel].at) return;
     try {
       await action();
+      ensureCurrent();
       retry[channel] = { at: 0, failures: 0 };
     } catch (error) {
+      ensureCurrent();
       if (error.name === 'AbortError' || error.status === 401) throw error;
       const failures = retry[channel].failures + 1;
       retry[channel] = { at: now() + retryDelay(error, failures), failures };
       if (channel === 'history' && error.status === 400) pending = null;
-      warnings.push(`${channel}_unavailable`);
     }
   }
 
@@ -150,42 +172,73 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
       offset = result.fetched_at_ms - now();
       const candidate = result.latest;
       if (candidate && (!latest || candidate.received_at_ms >= latest.received_at_ms)) {
-        if (isRunReset(latest, candidate)) { history = []; laps = []; lapKey = null; syncedTo = null; pending = null; truncated = false; lapsTruncated = false; generation++; retry.history.at = 0; retry.laps.at = 0; }
-        latest = candidate;
-      }
-      if (!latest) return snapshot([], course, { clockOffsetMs: offset });
-      const warnings = [];
-      if (!candidate) warnings.push('latest_unavailable');
-      const end = latest.received_at_ms;
-      const start = Math.max(0, end - Math.min(MAX_WINDOW_MS, latest.total_time_ms + OVERLAP_MS));
-      await background('history', async () => {
-        if (!pending) pending = { from: Math.max(start, (syncedTo ?? start) - OVERLAP_MS), to: end, cursor: null };
-        for (let page = 0; page < 3; page++) {
-          const params = pending.cursor ? { cursor: pending.cursor, limit: 1000 } : { from_ms: pending.from, to_ms: pending.to, limit: 1000 };
-          const result = await request('history', params, signal);
-          checkItems(result.history);
-          const all = splitRuns([...history, ...result.history, latest]).at(-1) ?? [];
-          truncated ||= all.length > MAX_SAMPLES;
-          history = all.slice(-MAX_SAMPLES);
-          pending.cursor = result.next_cursor;
-          if (!pending.cursor) { syncedTo = pending.to; pending = null; break; }
+        if (isRunReset(latest, candidate)) {
+          detailsController?.abort();
+          history = []; laps = []; serverLaps = []; lapKey = null; syncedTo = null; pending = null;
+          truncated = false; lapsTruncated = false; historyBusy = false; generation++;
+          retry.history = { at: 0, failures: 0 }; retry.laps = { at: 0, failures: 0 };
         }
-      }, warnings);
-      const key = `${generation}:${latest.lap_number}`;
-      let fetchedLaps = [];
-      if (key !== lapKey) await background('laps', async () => {
-        const result = await request('laps', { from_ms: start, to_ms: end }, signal);
-        if (!Array.isArray(result.laps) || !result.laps.every(lap => Number.isInteger(lap.lap) && lap.lap >= 1 && lap.lap <= 7 && (lap.time_ms === null || (Number.isFinite(lap.time_ms) && lap.time_ms > 0)))) throw new ApiError('invalid_response');
-        // An eventually consistent index may not yet include the lap transition.
-        if (!result.latest || result.latest.lap_number !== latest.lap_number || Math.abs((result.latest.timestamp_ms - result.latest.total_time_ms) - (latest.timestamp_ms - latest.total_time_ms)) > 1000) throw new ApiError('index_pending');
-        fetchedLaps = result.laps;
-        lapsTruncated = !!result.truncated;
-        lapKey = key;
-      }, warnings);
-      if (truncated || lapsTruncated) warnings.push('history_truncated');
-      const samples = splitRuns([...history, latest]).at(-1) ?? [latest];
-      laps = mergeLaps(laps, inferLaps(samples), fetchedLaps);
-      return snapshot(samples, course, { laps, warnings, clockOffsetMs: offset, loadingHistory: !!pending });
+        latest = candidate;
+        rememberSamples([candidate]);
+      }
+      latestMissing = !candidate && !!latest;
+      // This method never waits for history or lap endpoints.
+      return currentSnapshot();
+    },
+
+    refreshDetails({ signal } = {}) {
+      if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+      if (detailsTask) return detailsTask;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      detailsController = controller;
+      const run = generation, anchor = latest;
+      const ensureCurrent = () => {
+        if (controller.signal.aborted || generation !== run) throw new DOMException('Aborted', 'AbortError');
+      };
+      // One bounded backfill may run while multiple latest polls complete.
+      detailsTask = Promise.resolve().then(async () => {
+        ensureCurrent();
+        if (!anchor) return currentSnapshot();
+        const end = anchor.received_at_ms;
+        const start = Math.max(0, end - Math.min(MAX_WINDOW_MS, anchor.total_time_ms + OVERLAP_MS));
+        await background('history', async () => {
+          historyBusy = true;
+          try {
+            if (!pending) pending = { from: Math.max(start, (syncedTo ?? start) - OVERLAP_MS), to: end, cursor: null };
+            for (let page = 0; page < 3; page++) {
+              const params = pending.cursor ? { cursor: pending.cursor, limit: 1000 } : { from_ms: pending.from, to_ms: pending.to, limit: 1000 };
+              const result = await request('history', params, controller.signal);
+              ensureCurrent();
+              checkItems(result.history);
+              rememberSamples(result.history);
+              pending.cursor = result.next_cursor;
+              if (!pending.cursor) { syncedTo = pending.to; pending = null; break; }
+            }
+          } finally {
+            historyBusy = false;
+          }
+        }, ensureCurrent);
+        const key = `${run}:${anchor.lap_number}`;
+        if (key !== lapKey) await background('laps', async () => {
+          const result = await request('laps', { from_ms: start, to_ms: end }, controller.signal);
+          ensureCurrent();
+          if (!Array.isArray(result.laps) || !result.laps.every(lap => Number.isInteger(lap.lap) && lap.lap >= 1 && lap.lap <= 7 && (lap.time_ms === null || (Number.isFinite(lap.time_ms) && lap.time_ms > 0)))) throw new ApiError('invalid_response');
+          // Compare with the request's sample, not a newer concurrent latest poll.
+          if (!result.latest || result.latest.lap_number !== anchor.lap_number || Math.abs((result.latest.timestamp_ms - result.latest.total_time_ms) - (anchor.timestamp_ms - anchor.total_time_ms)) > 1000) throw new ApiError('index_pending');
+          serverLaps = result.laps;
+          lapsTruncated = !!result.truncated;
+          lapKey = key;
+        }, ensureCurrent);
+        ensureCurrent();
+        return currentSnapshot();
+      }).finally(() => {
+        signal?.removeEventListener('abort', abort);
+        detailsTask = null;
+        detailsController = null;
+      });
+      return detailsTask;
     },
 
     async getArchive({ from, to, signal } = {}) {

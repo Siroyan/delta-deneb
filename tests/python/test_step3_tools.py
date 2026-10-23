@@ -40,8 +40,8 @@ def test_invalid_key_errors_do_not_echo_the_key(token):
 
 
 @contextmanager
-def preview(scenario="live"):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_class(PreviewData(scenario)))
+def preview(scenario="live", **options):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_class(PreviewData(scenario, **options)))
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -118,3 +118,14 @@ def test_preview_can_reproduce_lap_two_to_three_with_partial_api_results():
         assert history["history"][0]["lap_number"] == 3
         _, _, laps = get(base, "/api/telemetry/laps")
         assert laps["truncated"] and laps["laps"][0]["time_ms"] is None
+
+
+def test_preview_can_delay_details_without_delaying_latest(monkeypatch):
+    delays = []
+    monkeypatch.setattr("scripts.preview_api.time.sleep", delays.append)
+    with preview(details_delay=8) as base:
+        assert get(base, "/api/telemetry/latest")[0] == 200
+        assert delays == []
+        assert get(base, "/api/telemetry/history")[0] == 200
+        assert get(base, "/api/telemetry/laps")[0] == 200
+        assert delays == [8, 8]

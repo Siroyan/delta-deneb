@@ -11,6 +11,7 @@ let response = null;
 let requestError = null;
 let timer;
 let controller;
+let detailsController;
 let requestVersion = 0;
 let chartRange = 300;
 let previousStatus = '';
@@ -29,6 +30,8 @@ function stateIsOld() { return !['live', 'finished'].includes(connectionState({ 
 function stopRequests() {
   clearTimeout(timer);
   controller?.abort();
+  detailsController?.abort();
+  detailsController = null;
   requestVersion++;
   if (historyLoading) {
     historyLoading = false;
@@ -155,6 +158,32 @@ function render() {
   strategyUi?.render(response);
 }
 
+async function refreshDetails() {
+  if (demoMode || archiveMode || document.hidden || detailsController || requestError?.status === 401) return;
+  const provider = api;
+  const details = new AbortController();
+  detailsController = details;
+  const isCurrent = () => detailsController === details && api === provider && !archiveMode && !document.hidden;
+  try {
+    const next = await provider.refreshDetails({ signal: details.signal });
+    if (!isCurrent()) return;
+    if (!response?.latest || next.received_at_ms >= response.received_at_ms) response = next;
+    render();
+  } catch (error) {
+    if (error.name === 'AbortError' || !isCurrent()) return;
+    if (error.status === 401) {
+      stopRequests();
+      response = null;
+      requestError = error;
+    } else if (response) {
+      response = { ...response, warnings: [...new Set([...response.warnings, 'details_unavailable'])] };
+    }
+    render();
+  } finally {
+    if (detailsController === details) detailsController = null;
+  }
+}
+
 async function poll() {
   if (archiveMode || document.hidden || requestError?.status === 401) return;
   clearTimeout(timer);
@@ -171,9 +200,14 @@ async function poll() {
     if (error.name === 'AbortError' || version !== requestVersion) return;
     requestError = error;
     failures++;
-    if (error.status === 401) response = null;
+    if (error.status === 401) {
+      response = null;
+      detailsController?.abort();
+      detailsController = null;
+    }
   }
   render();
+  if (!requestError) void refreshDetails();
   if (requestError?.status !== 401 && !archiveMode && !document.hidden) timer = setTimeout(poll, requestError ? retryDelay(requestError, failures) : POLL_MS);
 }
 

@@ -18,9 +18,10 @@ SCENARIOS = {"live", "stale", "empty", "gps-missing", "error", "unauthorized", "
 
 
 class PreviewData:
-    def __init__(self, scenario="live"):
+    def __init__(self, scenario="live", *, details_delay=0):
         self.started = int(time.time() * 1000)
         self.scenario = scenario
+        self.details_delay = details_delay
         self.course = json.loads((ROOT / "web/assets/course.json").read_text())
 
     def samples(self):
@@ -103,6 +104,8 @@ def handler_class(data):
                 return self.send_json(401, {"error": {"code": "unauthorized"}})
             if data.scenario == "error":
                 return self.send_json(503, {"error": {"code": "temporarily_unavailable"}})
+            if not url.path.endswith("/latest") and data.details_delay:
+                time.sleep(data.details_delay)
             now = int(time.time() * 1000)
             samples = data.samples()
             if url.path.endswith("/latest"):
@@ -144,8 +147,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="live")
+    parser.add_argument("--details-delay", type=float, default=0, help="Delay history/lap responses by 0–30 seconds; latest remains immediate")
     args = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_class(PreviewData(args.scenario)))
+    if not 0 <= args.details_delay <= 30:
+        parser.error("--details-delay must be between 0 and 30 seconds")
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_class(PreviewData(args.scenario, details_delay=args.details_delay)))
     print(f"Synthetic preview (no AWS): http://127.0.0.1:{args.port}/#token={TOKEN}", flush=True)
     try:
         server.serve_forever()
