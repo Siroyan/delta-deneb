@@ -135,13 +135,15 @@ export function initializeStrategy({ course, getResponse, onChange }) {
     $('strategy-type').dataset.type = plan.plan_type;
     $('strategy-label').textContent = `${filename} · ${plan.laps.length}周 / ${plan.laps.reduce((sum, lap) => sum + lap.runs.length, 0)}区間 · ブラウザ内に保存`;
     const number = response?.latest?.lap_number ?? 1;
-    const lap = plan.laps.find(item => item.lap === number) ?? plan.laps[0];
-    drawMap(lap);
-    const route = course.routes[lap.route_id];
+    const lap = plan.laps.find(item => item.lap === number);
+    if (lap) drawMap(lap);
+    else { layer.replaceChildren(); mapSignature = ''; }
+    legend.hidden = !lap;
+    const route = lap ? course.routes[lap.route_id] : null;
     const data = response?.latest;
-    const position = data ? projectOnRoute(route, data.latitude, data.longitude) : null;
-    const cue = strategyCue(lap, position?.s, route.length_m);
-    cueLabel.textContent = `LAP ${String(lap.lap).padStart(2, '0')} · ` + (response?.phase === 'finished' ? '走行終了' : cue ? `${cue.mode === 'engine' ? '使用予定区間' : '惰性予定区間'} / 次の${cue.next === 'LAP END' ? '周回終点' : cue.next}まで ${decimal(cue.distance_m, 0)} m（GPS推定）` : '位置未取得');
+    const position = data && route ? projectOnRoute(route, data.latitude, data.longitude) : null;
+    const cue = strategyCue(lap, position?.s, route?.length_m);
+    cueLabel.textContent = !lap ? 'この周回の走行戦略はありません' : `LAP ${String(lap.lap).padStart(2, '0')} · ` + (response?.phase === 'finished' ? '走行終了' : cue ? `${cue.mode === 'engine' ? '使用予定区間' : '惰性予定区間'} / 次の${cue.next === 'LAP END' ? '周回終点' : cue.next}まで ${decimal(cue.distance_m, 0)} m（GPS推定）` : '位置未取得');
     const detailLap = plan.laps.find(item => item.lap === (previewLap ?? number)) ?? plan.laps[0];
     $('strategy-lap').value = detailLap.lap;
     if (!$('strategy-details').hidden) drawDetails(detailLap, response);

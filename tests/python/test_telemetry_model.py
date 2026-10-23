@@ -51,36 +51,6 @@ def test_device_reboot_discards_previous_run_even_when_race_timers_increase():
     assert current_run(samples) == samples[1:]
 
 
-def test_completed_lap_time_comes_from_next_lap_boundary():
-    samples = [
-        sample(total=299500, lap_time=299500),
-        sample(lap=2, total=300500, lap_time=500),
-        sample(lap=3, total=630500, lap_time=500),
-    ]
-    assert lap_summaries(samples) == [
-        {"lap": 1, "time_ms": 300000, "source": "inferred_transition"},
-        {"lap": 2, "time_ms": 330000, "source": "inferred_transition"},
-    ]
-
-
-def test_first_observed_lap_start_is_derived_even_when_lap_one_is_not_loaded():
-    samples = [
-        sample(lap=2, total=301000, lap_time=1000),
-        sample(lap=3, total=631000, lap_time=1000),
-    ]
-    assert lap_summaries(samples) == [
-        {"lap": 2, "time_ms": 330000, "source": "inferred_transition"},
-    ]
-
-
-def test_skipped_lap_never_fabricates_duration():
-    samples = [
-        sample(lap=3, total=900000, lap_time=20000),
-        sample(lap=5, total=1500000, lap_time=20000),
-        sample(lap=6, total=1800000, lap_time=20000),
-    ]
-    assert [lap["time_ms"] for lap in lap_summaries(samples)] == [None, 300000]
-
-
-def test_last_lap_is_not_called_finished_without_an_observed_transition():
-    assert lap_summaries([sample(lap=7, total=2100000, lap_time=300000)]) == []
+def test_legacy_records_are_not_reconstructed_from_transitions():
+    samples = [sample(total=299500, lap_time=299500), sample(lap=2, total=300500, lap_time=500)]
+    assert lap_summaries(samples) == []

@@ -1,7 +1,6 @@
-import { TARGET_MS } from './format.js';
+import { deviceLaps } from './lap-state.js';
 
-// This module is the only data transport boundary. Replace getLatest() with fetch()
-// after the Lambda response contract is defined. No AWS request is sent in this demo.
+// Explicit demo mode only. Match the device lap contract without making AWS requests.
 const COMPLETED_MS = [300000, 335000, 333000];
 const BASE_ELAPSED_MS = 1172000;
 const FINISH_LAP_MS = [300000, 335000, 333000, 339000, 336000, 332000, 316000];
@@ -54,7 +53,7 @@ export function createMockApi({ course, now = () => Date.now(), latencyMs = 260 
         const fraction = Math.min(1, t / fullTime);
         const position = pointAtDistance(route, route.length_m * fraction);
         const totalTime = elapsed + t;
-        samples.push({ timestamp_ms: totalTime + 120000, received_at_ms: startEpoch + totalTime, speed: mockSpeed(index + 1, fraction), average_speed: totalTime > 0 ? (distanceBefore + route.length_m * fraction) / totalTime * 3600 : null, lap_number: index + 1, total_time_ms: totalTime, lap_time_ms: t, latitude: position.latitude, longitude: position.longitude, machine_id: 'pi', memo: 'delta-deneb UI demo' });
+        samples.push({ timestamp_ms: totalTime + 120000, received_at_ms: startEpoch + totalTime, speed: mockSpeed(index + 1, fraction), average_speed: totalTime > 0 ? (distanceBefore + route.length_m * fraction) / totalTime * 3600 : null, lap_number: index + 1, total_time_ms: totalTime, lap_time_ms: t, completed_lap_times_ms: times.slice(0, index), latitude: position.latitude, longitude: position.longitude, machine_id: 'pi', memo: 'delta-deneb UI demo' });
       }
       elapsed += time;
       distanceBefore += route.length_m;
@@ -96,10 +95,13 @@ export function createMockApi({ course, now = () => Date.now(), latencyMs = 260 
     advance();
     const route = routeForLap(course, lap);
     const point = pointAtDistance(route, lapDistance);
-    const latest = { speed: phase === 'finished' ? 0 : mockSpeed(lap, lapDistance / route.length_m), average_speed: totalDistance / elapsedMs * 3600, lap_number: lap, total_time_ms: Math.round(elapsedMs), lap_time_ms: Math.round(lapMs), latitude: point.latitude, longitude: point.longitude, timestamp_ms: Math.round(elapsedMs + 120000), machine_id: 'pi', memo: 'delta-deneb UI demo' };
+    // Round cumulative boundaries so completed + current stays exactly total.
+    let boundary = 0, previous = 0;
+    const completedTimes = completed.map(item => { boundary += item.time_ms; const end = Math.round(boundary); const value = end - previous; previous = end; return value; });
+    const latest = { speed: phase === 'finished' ? 0 : mockSpeed(lap, lapDistance / route.length_m), average_speed: totalDistance / elapsedMs * 3600, lap_number: lap, total_time_ms: Math.round(elapsedMs), lap_time_ms: phase === 'finished' ? completedTimes.at(-1) : Math.round(elapsedMs) - previous, completed_lap_times_ms: completedTimes, latitude: point.latitude, longitude: point.longitude, timestamp_ms: Math.round(elapsedMs + 120000), machine_id: 'pi', memo: 'delta-deneb UI demo' };
     const current = { ...latest, received_at_ms: now() };
     if (history.at(-1)?.total_time_ms !== current.total_time_ms) history.push(current);
-    return { latest, received_at_ms: now(), history: history.slice(-1600), laps: completed.map(item => ({ ...item, target_ms: item.distance_m / course.length_m * TARGET_MS })), phase, position: { ...point } };
+    return { latest, received_at_ms: now(), history: history.slice(-1600), laps: deviceLaps(latest), lap_times_available: true, phase, position: { ...point } };
   }
 
   function finishResponse() {
@@ -107,9 +109,9 @@ export function createMockApi({ course, now = () => Date.now(), latencyMs = 260 
     const fullHistory = seedHistory(FINISH_LAP_MS).map(sample => ({ ...sample, received_at_ms: now() - totalMs + sample.total_time_ms }));
     const finalRoute = routeForLap(course, course.lap_count);
     const position = pointAtDistance(finalRoute, finalRoute.length_m);
-    const latest = { speed: 0, average_speed: course.length_m / totalMs * 3600, lap_number: 7, total_time_ms: totalMs, lap_time_ms: FINISH_LAP_MS.at(-1), latitude: position.latitude, longitude: position.longitude, timestamp_ms: totalMs + 120000, machine_id: 'pi', memo: 'delta-deneb UI demo' };
+    const latest = { speed: 0, average_speed: course.length_m / totalMs * 3600, lap_number: 7, total_time_ms: totalMs, lap_time_ms: FINISH_LAP_MS.at(-1), completed_lap_times_ms: [...FINISH_LAP_MS], latitude: position.latitude, longitude: position.longitude, timestamp_ms: totalMs + 120000, machine_id: 'pi', memo: 'delta-deneb UI demo' };
     fullHistory.push({ ...latest, received_at_ms: now() });
-    return { latest, received_at_ms: now(), phase: 'finished', history: fullHistory, position, laps: FINISH_LAP_MS.map((time_ms, index) => ({ lap: index + 1, time_ms, distance_m: routeForLap(course, index + 1).length_m, target_ms: routeForLap(course, index + 1).length_m / course.length_m * TARGET_MS })) };
+    return { latest, received_at_ms: now(), phase: 'finished', history: fullHistory, position, laps: deviceLaps(latest), lap_times_available: true };
   }
 
   return {

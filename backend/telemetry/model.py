@@ -5,6 +5,7 @@ import math
 
 
 MAX_SAFE_INTEGER = 2**53 - 1
+MAX_LAPS = 100
 
 
 class InvalidSample(ValueError):
@@ -34,11 +35,33 @@ def normalize_sample(payload, *, received_at_ms):
         raise InvalidSample("Missing or invalid AWS receipt timestamp")
     sample = {"received_at_ms": receipt}
     for name in ("timestamp_ms", "total_time_ms", "lap_time_ms", "lap_number"):
-        sample[name] = number(payload.get(name), integer=True, minimum=1 if name == "lap_number" else 0, maximum=MAX_SAFE_INTEGER)
+        sample[name] = number(payload.get(name), integer=True, minimum=0, maximum=MAX_LAPS if name == "lap_number" else MAX_SAFE_INTEGER)
         if sample[name] is None:
             raise InvalidSample("Missing or invalid telemetry counters")
     if sample["lap_time_ms"] > sample["total_time_ms"]:
         raise InvalidSample("Lap time exceeds total time")
+    if sample["lap_number"] == 0 and (sample["total_time_ms"] != 0 or sample["lap_time_ms"] != 0):
+        raise InvalidSample("Waiting counters must be zero")
+    times = payload.get("completed_lap_times_ms")
+    sample["completed_lap_times_ms"] = None
+    if times is not None:
+        if not isinstance(times, list) or len(times) > MAX_LAPS:
+            raise InvalidSample("Invalid completed lap array")
+        times = [number(value, integer=True, minimum=0, maximum=MAX_SAFE_INTEGER) for value in times]
+        if any(value is None for value in times):
+            raise InvalidSample("Invalid completed lap duration")
+        lap, total, current = sample["lap_number"], sample["total_time_ms"], sample["lap_time_ms"]
+        if lap == 0:
+            valid = not times and total == current == 0
+        elif len(times) == lap - 1:
+            valid = sum(times) + current == total
+        elif len(times) == lap:
+            valid = sum(times) == total and times[-1] == current
+        else:
+            valid = False
+        if not valid:
+            raise InvalidSample("Completed laps disagree with telemetry counters")
+        sample["completed_lap_times_ms"] = times
     machine = payload.get("machine_id")
     if not isinstance(machine, str) or not machine or len(machine) > 128:
         raise InvalidSample("Missing or invalid machine identifier")
@@ -73,27 +96,15 @@ def current_run(samples):
     return samples[start:]
 
 
-def lap_summaries(samples):
-    """Infer completed laps from observed transitions; gaps stay unknown.
+def finish_confirmed(sample):
+    """The device includes its final lap only after finishing."""
+    return bool(sample and sample["lap_number"] > 0
+                and sample.get("completed_lap_times_ms") is not None
+                and len(sample["completed_lap_times_ms"]) == sample["lap_number"])
 
-    The first sample of the next lap provides the previous lap's end on the
-    race clock: total_time_ms - lap_time_ms. The first observed lap supplies
-    its own start the same way, even if earlier samples were not loaded.
-    Skipped laps must not invent times.
-    """
-    results = []
-    previous = None
-    lap_start = samples[0]["total_time_ms"] - samples[0]["lap_time_ms"] if samples else None
-    for sample in samples:
-        if previous is not None and sample["lap_number"] != previous["lap_number"]:
-            end = sample["total_time_ms"] - sample["lap_time_ms"]
-            adjacent = sample["lap_number"] == previous["lap_number"] + 1
-            duration = end - lap_start if adjacent and lap_start is not None else None
-            results.append({
-                "lap": previous["lap_number"],
-                "time_ms": duration if duration is not None and duration > 0 else None,
-                "source": "inferred_transition",
-            })
-            lap_start = end
-        previous = sample
-    return results
+
+def lap_summaries(samples):
+    """Use only the newest packet; never reconstruct or retain earlier laps."""
+    times = samples[-1].get("completed_lap_times_ms") if samples else None
+    return [{"lap": index + 1, "time_ms": duration, "source": "device"}
+            for index, duration in enumerate(times or [])]

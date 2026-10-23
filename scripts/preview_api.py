@@ -9,12 +9,12 @@ from pathlib import Path
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from backend.telemetry.model import current_run, lap_summaries
+from backend.telemetry.model import finish_confirmed, lap_summaries
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "local-preview"
-SCENARIOS = {"live", "stale", "empty", "gps-missing", "error", "unauthorized", "lap-2", "lap-3-partial"}
+SCENARIOS = {"live", "stale", "empty", "gps-missing", "error", "unauthorized", "lap-2", "lap-3-partial", "latest-only", "waiting", "started", "finished", "zero-final", "lap-100", "legacy"}
 
 
 class PreviewData:
@@ -30,6 +30,24 @@ class PreviewData:
         now = int(time.time() * 1000)
         if self.scenario == "stale":
             now = self.started - 30000
+        if self.scenario in {"latest-only", "waiting", "started", "finished", "zero-final", "lap-100", "legacy"}:
+            payload = json.loads((ROOT / "tests/fixtures/mqtt-completed-laps.json").read_text())
+            payload.pop("memo", None)
+            if self.scenario == "waiting":
+                payload.update(lap_number=0, total_time_ms=0, lap_time_ms=0, completed_lap_times_ms=[], average_speed=None)
+            elif self.scenario == "started":
+                payload.update(lap_number=1, total_time_ms=1000, lap_time_ms=1000, completed_lap_times_ms=[])
+            elif self.scenario == "finished":
+                payload["completed_lap_times_ms"].append(45000)
+            elif self.scenario == "zero-final":
+                payload.update(lap_number=2, total_time_ms=362000, lap_time_ms=0, completed_lap_times_ms=[362000, 0])
+            elif self.scenario == "lap-100":
+                payload.update(lap_number=100, total_time_ms=100000, lap_time_ms=1000, completed_lap_times_ms=[1000] * 100)
+            elif self.scenario == "legacy":
+                payload.pop("completed_lap_times_ms")
+            # Event-only waiting/finished packets retain their original receipt.
+            receipt = self.started if self.scenario in {"waiting", "finished", "zero-final", "lap-100"} else now
+            return [payload | {"sample_id": f"preview-{self.scenario}-{receipt}", "received_at_ms": receipt}]
         current_start = self.started - 22 * 60000
         elapsed = now - current_start
         if self.scenario in {"lap-2", "lap-3-partial"}:
@@ -59,6 +77,7 @@ class PreviewData:
                     "sample_id": f"preview-{name}-{total}", "machine_id": "delta_machine_alpha",
                     "received_at_ms": start + total, "timestamp_ms": boot + total,
                     "total_time_ms": total, "lap_time_ms": lap_time, "lap_number": lap,
+                    "completed_lap_times_ms": ([300000, 330000][:lap - 1] if name == "current" and self.scenario == "lap-3-partial" else [300000] * (lap - 1)),
                     "speed": round(27 + 8 * math.sin(total / 18000), 3), "average_speed": 26.5,
                     "latitude": None if self.scenario == "gps-missing" else point["latitude"],
                     "longitude": None if self.scenario == "gps-missing" else point["longitude"],
@@ -92,6 +111,8 @@ def handler_class(data):
                 scenario = query.get("scenario", data.scenario)
                 if scenario not in SCENARIOS:
                     return self.send_json(400, {"error": {"code": "invalid_request"}})
+                if data.scenario != scenario:
+                    data.started = int(time.time() * 1000)
                 data.scenario = scenario
                 return self.send_json(200, {"scenario": scenario})
             if not url.path.startswith("/api/"):
@@ -107,6 +128,8 @@ def handler_class(data):
             if not url.path.endswith("/latest") and data.details_delay:
                 time.sleep(data.details_delay)
             now = int(time.time() * 1000)
+            if data.scenario == "latest-only" and not url.path.endswith("/latest"):
+                return self.send_json(503, {"error": {"code": "temporarily_unavailable"}})
             samples = data.samples()
             if url.path.endswith("/latest"):
                 latest = samples[-1] if samples else None
@@ -133,13 +156,12 @@ def handler_class(data):
                 more = offset + limit < len(samples)
                 cursor = base64.urlsafe_b64encode(json.dumps({"from": start, "to": end, "offset": offset + limit}).encode()).decode() if more else None
                 return self.send_json(200, common | {"history": samples[offset:offset + limit], "next_cursor": cursor})
-            run = current_run(samples)
-            if data.scenario == "lap-3-partial":
-                return self.send_json(200, common | {
-                    "laps": [{"lap": 2, "time_ms": None, "source": "inferred_transition"}],
-                    "latest": run[-1], "truncated": True, "finish_confirmed": False,
-                })
-            return self.send_json(200, common | {"laps": lap_summaries(run), "latest": run[-1] if run else None, "truncated": False, "finish_confirmed": False})
+            latest = samples[-1] if samples else None
+            return self.send_json(200, common | {
+                "laps": lap_summaries([latest] if latest else []), "latest": latest,
+                "truncated": False, "finish_confirmed": finish_confirmed(latest),
+                "lap_times_available": latest is not None and latest.get("completed_lap_times_ms") is not None,
+            })
     return Handler
 
 

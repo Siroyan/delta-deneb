@@ -28,7 +28,7 @@ def fetch(url, token=None):
         return Response(result.status, {key.lower(): value for key, value in result.headers.items()}, result.read())
 
 
-def check_telemetry(outputs, token, *, request=fetch, require_data=False):
+def check_telemetry(outputs, token, *, request=fetch, require_data=False, require_completed_laps=False):
     base = outputs["SiteUrl"].rstrip("/")
 
     def get(path, *, authorized=True, expected=200):
@@ -62,11 +62,17 @@ def check_telemetry(outputs, token, *, request=fetch, require_data=False):
     laps = get("/api/telemetry/laps" + ("?" + urlencode(lap_params) if lap_params else ""))
     if laps.get("invalid_items") or laps.get("truncated"):
         raise ValueError("Lap history is incomplete; inspect the stored data or narrow the time window")
-    if require_data and (sample is None or not history["history"]):
+    if (require_data or require_completed_laps) and sample is None:
         raise ValueError("API is reachable but no telemetry is stored yet; publish from delta-vega and retry")
+    if require_completed_laps:
+        times = sample.get("completed_lap_times_ms")
+        if not isinstance(times, list) or len(times) > 100 or any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in times):
+            raise ValueError("Latest sample has no valid completed_lap_times_ms; update the IoT rule and firmware, publish a new sample and retry")
     return [
         "Unauthenticated telemetry requests are rejected",
         "Token-authenticated latest, history, and lap APIs respond without caching",
+        *(["Device completed-lap array is available"] if sample and isinstance(sample.get("completed_lap_times_ms"), list)
+           else ["WAIT Legacy sample has no completed-lap array; new-field ingestion is not verified"] if sample else []),
         "Stored telemetry was read successfully" if sample else "WAIT No stored telemetry yet; ingestion is not verified",
     ]
 
@@ -93,6 +99,7 @@ def main():
     parser.add_argument("--profile", help="Read the token using your own AWS profile, without printing it")
     parser.add_argument("--stage", choices=("dev", "prod"), default="dev")
     parser.add_argument("--require-data", action="store_true")
+    parser.add_argument("--require-completed-laps", action="store_true", help="Require a new-format latest sample, including a valid empty array")
     args = parser.parse_args()
     try:
         outputs = deployment_outputs(json.loads(args.outputs.read_text()))
@@ -104,7 +111,7 @@ def main():
             token = getpass("Viewer token (input hidden): ")
         if not token:
             raise ValueError("Viewer token is required")
-        for result in check_telemetry(outputs, token, require_data=args.require_data):
+        for result in check_telemetry(outputs, token, require_data=args.require_data, require_completed_laps=args.require_completed_laps):
             print(result if result.startswith("WAIT ") else f"PASS {result}")
     except subprocess.TimeoutExpired:
         parser.exit(1, "FAIL Timed out reading the viewer token\n")

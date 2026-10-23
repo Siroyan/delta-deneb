@@ -1,15 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { ApiError, createTelemetryApi, readViewerToken, retryDelay, splitRuns, inferLaps, snapshot, fromTokyoInput, toTokyoInput } from '../web/js/telemetry-api.js';
+import { ApiError, createTelemetryApi, readViewerToken, retryDelay, snapshot, fromTokyoInput, toTokyoInput } from '../web/js/telemetry-api.js';
+import { validLapState } from '../web/js/lap-state.js';
 import { connectionState } from '../web/js/format.js';
 
 const course = JSON.parse(await readFile(new URL('../web/assets/course.json', import.meta.url)));
 const NOW = 1800000000000;
 const TOKEN = 'example-viewer-token';
-function sample(id, { total = 1000, lap = 1, lapTime = total, received = NOW, uptime = total + 120000, speed = 27 } = {}) {
+function sample(id, { total = 1000, lap = 1, lapTime = total, received = NOW, uptime = total + 120000, speed = 27, completed = undefined } = {}) {
   const point = course.routes[lap === 1 ? 'first_lap' : lap === 7 ? 'final_lap' : 'regular_lap'].points[10];
-  return { sample_id: id, machine_id: 'delta_machine_alpha', received_at_ms: received, timestamp_ms: uptime,
+  if (completed === undefined) {
+    const boundary = total - lapTime;
+    completed = lap <= 1 ? [] : lap === 3 ? [300000, boundary - 300000] : Array.from({ length: lap - 1 }, (_, index) => Math.floor(boundary / (lap - 1)) + (index < boundary % (lap - 1) ? 1 : 0));
+  }
+  return { completed_lap_times_ms: completed, sample_id: id, machine_id: 'delta_machine_alpha', received_at_ms: received, timestamp_ms: uptime,
     total_time_ms: total, lap_time_ms: lapTime, lap_number: lap, speed, average_speed: 26, latitude: point.latitude, longitude: point.longitude };
 }
 function json(body, status = 200, headers = {}) { return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } }); }
@@ -24,11 +29,7 @@ function harness(initial, { pageSize = 1000, intercept = null, timeoutMs = 10000
     const values = state.items;
     const latest = values.at(-1) ?? null;
     if (url.pathname.endsWith('/latest')) return json({ latest, received_at_ms: latest?.received_at_ms ?? null, fetched_at_ms: state.now, invalid_items: 0 }, state.latestStatus);
-    if (url.pathname.endsWith('/laps')) {
-      if (state.lapError) return json({}, 503);
-      const run = splitRuns(values).at(-1) ?? [];
-      return json({ latest, laps: state.lapPayload ?? inferLaps(run), truncated: state.lapPayload !== null, invalid_items: 0 });
-    }
+    if (url.pathname.endsWith('/laps')) assert.fail('live lap timing must not request history summaries');
     if (state.historyError) return json({ error: { code: 'private-raw-error' } }, 503, { 'retry-after': '6' });
     const cursor = url.searchParams.get('cursor');
     const context = cursor ? JSON.parse(Buffer.from(cursor, 'base64url')) : { from: Number(url.searchParams.get('from_ms')), to: Number(url.searchParams.get('to_ms')), offset: 0 };
@@ -93,7 +94,7 @@ test('latest values are published without waiting for details', async () => {
   assert.deepEqual(state.calls.map(call => new URL(call.path, 'https://example.test').pathname), ['/api/telemetry/latest']);
 });
 
-for (const channel of ['history', 'laps']) test(`slow ${channel} cannot delay new latest polls or overwrite a newer sample`, async () => {
+for (const channel of ['history']) test(`slow ${channel} cannot delay new latest polls or overwrite a newer sample`, async () => {
   const started = deferred(), release = deferred();
   const first = sample('first');
   const { api, state } = harness([first], { intercept: (path) => {
@@ -162,7 +163,7 @@ test('a new run discards even an old backfill that ignores cancellation', async 
   assert.deepEqual(after.laps, []);
 });
 
-test('latest observations preserve lap transitions while history is stalled', async () => {
+test('latest packet supplies laps while old history is stalled', async () => {
   const started = deferred(), release = deferred();
   const first = sample('lap1', { total: 299000 });
   const { api, state } = harness([first], { intercept: path => {
@@ -192,19 +193,19 @@ test('detail timeouts and authorization failures are handled independently of la
   state.now += 3000;
   state.items.push(sample('second', { total: 4000, received: state.now }));
   assert.equal((await api.getLatest()).latest.sample_id, 'second');
-  const unauthorized = harness([sample('first')], { intercept: path => path.includes('/laps') ? json({}, 401) : undefined });
+  const unauthorized = harness([sample('first')], { intercept: path => path.includes('/history') ? json({}, 401) : undefined });
   await unauthorized.api.getLatest();
   await assert.rejects(unauthorized.api.refreshDetails(), error => error.status === 401);
 });
 
-test('history overlap deduplicates sample IDs and laps are not queried on every poll', async () => {
+test('history overlap deduplicates sample IDs and lap summaries are never queried', async () => {
   const { api, state } = harness([sample('a', { received: NOW - 1000 }), sample('b', { total: 2000 })]);
   await readWithDetails(api);
   state.now += 3000;
   state.items.push(sample('c', { total: 5000, received: state.now }));
   const value = await readWithDetails(api);
   assert.deepEqual(value.history.map(item => item.sample_id), ['a', 'b', 'c']);
-  assert.equal(state.calls.filter(call => call.path.startsWith('/api/telemetry/laps')).length, 1);
+  assert.equal(state.calls.filter(call => call.path.startsWith('/api/telemetry/laps')).length, 0);
   const histories = state.calls.filter(call => call.path.startsWith('/api/telemetry/history'));
   assert.ok(Number(new URL(histories[1].path, 'https://example.test').searchParams.get('from_ms')) <= NOW - 5000);
 });
@@ -292,43 +293,28 @@ test('archival records split into separate inferred runs without polling live en
   assert.ok(state.calls.every(call => call.path.startsWith('/api/telemetry/history')));
 });
 
-test('the first observed lap carries its own start boundary, even after lap 1', () => {
-  const items = [sample('a', { lap: 3, total: 900000, lapTime: 1000 }), sample('b', { lap: 4, total: 1200000, lapTime: 1000 })];
-  assert.equal(inferLaps(items)[0].time_ms, 300000);
-  const value = snapshot(items, course);
-  assert.equal(value.phase, 'running');
-  assert.equal(value.laps.length, 1);
-});
-
-test('lap 2 to 3 keeps past times when the lap API returns a partial summary', async () => {
-  const { api, state } = harness([
-    sample('lap1', { total: 299000, received: NOW - 2000 }),
-    sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
-  ]);
-  assert.equal((await readWithDetails(api)).laps[0].time_ms, 300000);
-  state.now += 330000;
-  state.items.push(sample('lap3', { total: 631000, lap: 3, lapTime: 1000, received: state.now }));
-  state.lapPayload = [{ lap: 2, time_ms: null, source: 'inferred_transition' }];
-  const result = await readWithDetails(api);
-  assert.deepEqual(result.laps.map(({ lap, time_ms }) => [lap, time_ms]), [[1, 300000], [2, 330000]]);
-  assert.ok(result.warnings.includes('history_truncated'));
-});
-
-test('lap 2 to 3 keeps past times through history and lap API errors', async () => {
-  const { api, state } = harness([
-    sample('lap1', { total: 299000, received: NOW - 2000 }),
-    sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
-  ]);
-  await readWithDetails(api);
-  state.now += 330000;
-  state.items = [sample('lap3', { total: 631000, lap: 3, lapTime: 1000, received: state.now })];
+test('a single latest packet is sufficient even when all detail endpoints fail', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/mqtt-completed-laps.json', import.meta.url)));
+  const { api, state } = harness([{ ...fixture, sample_id: 'only', received_at_ms: NOW }]);
   state.historyError = true;
-  state.lapError = true;
-  const result = await readWithDetails(api);
-  assert.deepEqual(result.laps.map(({ lap, time_ms }) => [lap, time_ms]), [[1, 300000], [2, 330000]]);
+  const first = await api.getLatest();
+  assert.deepEqual(first.laps.map(item => item.time_ms), [362000, 358000]);
+  assert.equal(first.phase, 'running');
+  assert.deepEqual((await api.refreshDetails()).laps, first.laps);
+  assert.equal(state.calls.filter(call => call.path.includes('/laps')).length, 0);
 });
 
-test('known lap times survive cache eviction but clear on an actual new run', async () => {
+test('jumping directly to lap 3 uses the full current array', async () => {
+  const { api, state } = harness([sample('lap1')]);
+  await api.getLatest();
+  state.now += 3000;
+  state.items = [sample('lap3', { lap: 3, total: 765000, lapTime: 45000, completed: [362000, 358000], received: state.now })];
+  state.historyError = true;
+  const result = await readWithDetails(api);
+  assert.deepEqual(result.laps.map(({ lap, time_ms }) => [lap, time_ms]), [[1, 362000], [2, 358000]]);
+});
+
+test('latest array survives speed-history eviction and clears on new run', async () => {
   const { api, state } = harness([
     sample('lap1', { total: 299000, received: NOW - 2000 }),
     sample('lap2', { total: 301000, lap: 2, lapTime: 1000 }),
@@ -351,10 +337,65 @@ test('known lap times survive cache eviction but clear on an actual new run', as
   assert.deepEqual((await readWithDetails(api)).laps, []);
 });
 
-test('skipped and unobserved laps stay unknown, including the final lap', () => {
-  const items = [sample('a', { lap: 3, total: 900000, lapTime: 1000 }), sample('b', { lap: 5, total: 1500000, lapTime: 1000 })];
-  assert.equal(inferLaps(items)[0].time_ms, null);
-  assert.deepEqual(inferLaps([sample('last', { lap: 7, total: 2100000, lapTime: 300000 })]), []);
+test('legacy records never infer or retain lap durations', async () => {
+  const { api, state } = harness([sample('new', { lap: 2, total: 301000, lapTime: 1000, completed: [300000] })]);
+  assert.equal((await api.getLatest()).laps.length, 1);
+  state.now += 3000;
+  state.items = [sample('legacy', { lap: 3, total: 631000, lapTime: 1000, completed: null, received: state.now })];
+  const value = await api.getLatest();
+  assert.deepEqual(value.laps, []);
+  assert.equal(value.lap_times_available, false);
+  assert.equal(value.phase, 'running');
+});
+
+test('waiting, restart and a replacement at identical counters use only the current array', async () => {
+  const { api, state } = harness([sample('old', { lap: 2, total: 300000, lapTime: 0, completed: [300000, 0] })]);
+  assert.equal((await api.getLatest()).phase, 'finished');
+  for (const [id, lap, total, current, times] of [
+    ['replacement', 2, 300000, 0, [300000]],
+    ['cancel', 0, 0, 0, []],
+    ['start', 1, 1000, 1000, []],
+  ]) {
+    state.now += 3000;
+    state.items = [sample(id, { lap, total, lapTime: current, completed: times, received: state.now })];
+    const value = await api.getLatest();
+    assert.deepEqual(value.laps.map(item => item.time_ms), times);
+    assert.equal(value.phase, lap === 0 ? 'waiting' : 'running');
+  }
+});
+
+test('finished result includes a zero final lap and stays finished after event-only publishing stops', async () => {
+  const { api } = harness([sample('finished', { lap: 2, total: 362000, lapTime: 0, completed: [362000, 0] })]);
+  const value = await api.getLatest();
+  assert.equal(value.phase, 'finished');
+  assert.deepEqual(value.laps.map(item => item.time_ms), [362000, 0]);
+  assert.equal(connectionState({ response: value, now: NOW + 3600000 }), 'finished');
+  assert.equal(connectionState({ response: { ...value, phase: 'waiting' }, now: NOW + 3600000 }), 'waiting');
+});
+
+test('100 laps and arbitrary completed lap counts are accepted without 7-lap assumptions', async () => {
+  for (const count of [1, 3, 8, 100]) {
+    const { api } = harness([sample('finished', { lap: count, total: count * 1000, lapTime: 1000, completed: Array(count).fill(1000) })]);
+    const value = await api.getLatest();
+    assert.equal(value.laps.length, count);
+    assert.equal(value.phase, 'finished');
+    assert.equal(value.laps.at(-1).time_ms, 1000);
+  }
+});
+
+test('invalid completed arrays and counters are rejected before display', async () => {
+  const base = sample('base', { lap: 3, total: 765000, lapTime: 45000, completed: [362000, 358000] });
+  for (const changes of [
+    { completed_lap_times_ms: '[]' }, { completed_lap_times_ms: [362000, true] },
+    { completed_lap_times_ms: [362000, -1] }, { completed_lap_times_ms: [362000, 358000.5] },
+    { completed_lap_times_ms: [362000, 358001] }, { completed_lap_times_ms: [362000] },
+    { completed_lap_times_ms: Array(101).fill(0) }, { lap_number: 101 },
+    { lap_number: 0, total_time_ms: 1, lap_time_ms: 0, completed_lap_times_ms: null },
+  ]) {
+    const current = { ...base, ...changes };
+    assert.equal(validLapState(current), false);
+    await assert.rejects(harness([current]).api.getLatest(), error => error.code === 'invalid_response');
+  }
 });
 
 test('real GPS loss keeps sensor missing values and does not fabricate map positions', () => {

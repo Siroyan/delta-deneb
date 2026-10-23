@@ -252,3 +252,8 @@ def test_viewer_token_is_generated_and_never_exported_as_plaintext(foundation):
     assert secret["DeletionPolicy"] == "Retain"
     assert "ViewerSecretArn" in foundation["Outputs"]
     assert "ViewerToken" not in foundation["Outputs"]
+
+
+def test_iot_rule_preserves_the_device_completed_lap_array(foundation):
+    _, rule = only(foundation, "AWS::IoT::TopicRule")
+    assert "completed_lap_times_ms" in rule["Properties"]["TopicRulePayload"]["Sql"]

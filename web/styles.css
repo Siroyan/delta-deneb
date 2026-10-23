@@ -186,3 +186,6 @@
 .session-controls { flex-direction: column; align-items: flex-end; gap: 6px; }
 .connection { padding-bottom: 0; justify-content: flex-end; }
 @media (max-width: 599px) { .session-controls { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; } }
+
+/* Keep up to 100 laps within the approved dashboard layout. */
+.laps-panel .table-scroll{max-height:250px;overflow:auto}.lap-table thead{position:sticky;top:0;z-index:1}.status-pill[data-status="waiting"]{color:var(--muted)}
