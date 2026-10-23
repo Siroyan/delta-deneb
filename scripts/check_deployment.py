@@ -33,7 +33,7 @@ def deployment_outputs(document):
     return candidates[0]
 
 
-def check_deployment(outputs, *, request=fetch, stage="dev"):
+def check_deployment(outputs, *, request=fetch, stage="dev", step=1):
     results = []
 
     def expect(url, status, content_type=None):
@@ -60,7 +60,7 @@ def check_deployment(outputs, *, request=fetch, stage="dev"):
 
     health = expect(outputs["HealthUrl"], 200, "application/json")
     payload = json.loads(health.body)
-    if any(payload.get(key) != expected for key, expected in {"status": "ok", "service": "delta-deneb", "stage": stage, "step": 1}.items()):
+    if any(payload.get(key) != expected for key, expected in {"status": "ok", "service": "delta-deneb", "stage": stage, "step": step}.items()):
         raise ValueError("Unexpected health response")
     if "no-store" not in health.headers.get("cache-control", ""):
         raise ValueError("The health response must not be cached")
@@ -83,10 +83,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outputs", type=Path, default=Path("cdk-outputs.dev.json"))
     parser.add_argument("--stage", choices=("dev", "prod"), default="dev")
+    parser.add_argument("--step", type=int, choices=(1, 2), default=1)
     args = parser.parse_args()
     try:
         outputs = deployment_outputs(json.loads(args.outputs.read_text()))
-        for result in check_deployment(outputs, stage=args.stage):
+        for result in check_deployment(outputs, stage=args.stage, step=args.step):
             print(f"PASS {result}")
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f"FAIL {error}\n")

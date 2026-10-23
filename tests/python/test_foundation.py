@@ -79,20 +79,28 @@ def test_lambda_url_requires_iam_and_both_permissions_are_distribution_scoped(fo
             assert props["InvokedViaFunctionUrl"] is True
 
 
-def test_health_api_does_not_access_dynamodb_or_other_existing_services(foundation):
-    assert not any(value["Type"].startswith(("AWS::DynamoDB::", "AWS::IoT::", "AWS::IoTSiteWise::", "AWS::Grafana::")) for value in foundation["Resources"].values())
-    api_id, api = next((key, value) for key, value in resources(foundation, "AWS::Lambda::Function").items() if value["Properties"].get("Handler") == "handler.handler")
-    assert api["Properties"]["Environment"]["Variables"] == {"STAGE": "dev"}
+def test_api_only_reads_its_telemetry_index_and_viewer_secret(foundation):
+    assert not any(value["Type"].startswith(("AWS::IoTSiteWise::", "AWS::Grafana::")) for value in foundation["Resources"].values())
+    api_id, api = next((key, value) for key, value in resources(foundation, "AWS::Lambda::Function").items() if value["Properties"].get("Handler") == "backend.telemetry.handler.handler")
+    variables = api["Properties"]["Environment"]["Variables"]
+    assert variables["STAGE"] == "dev"
+    assert variables["MACHINE_ID"] == "delta_machine_alpha"
+    assert variables["TELEMETRY_INDEX"] == "by-machine-received-at"
     role_id = api["Properties"]["Role"]["Fn::GetAtt"][0]
+    actions = set()
     for policy in resources(foundation, "AWS::IAM::Policy").values():
         if {"Ref": role_id} not in policy["Properties"].get("Roles", []):
             continue
         statements = policy["Properties"]["PolicyDocument"]["Statement"]
         for statement in statements:
-            actions = statement["Action"]
-            if isinstance(actions, str):
-                actions = [actions]
-            assert all(action.startswith("logs:") for action in actions)
+            granted = statement["Action"]
+            actions.update([granted] if isinstance(granted, str) else granted)
+            if "dynamodb:Query" in granted:
+                assert "by-machine-received-at" in json.dumps(statement["Resource"])
+                assert statement["Condition"] == {"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["delta_machine_alpha"]}}
+    assert "dynamodb:Query" in actions
+    assert "secretsmanager:GetSecretValue" in actions
+    assert not actions & {"dynamodb:Scan", "dynamodb:PutItem", "dynamodb:DeleteItem", "secretsmanager:PutSecretValue"}
     assert api_id
 
 
@@ -111,7 +119,7 @@ def test_api_paths_do_not_cache_and_never_fall_back_to_index_html(foundation):
     _, request_policy = only(foundation, "AWS::CloudFront::OriginRequestPolicy")
     request_config = request_policy["Properties"]["OriginRequestPolicyConfig"]
     assert request_config["CookiesConfig"]["CookieBehavior"] == "none"
-    assert request_config["HeadersConfig"]["HeaderBehavior"] == "none"
+    assert request_config["HeadersConfig"] == {"HeaderBehavior": "whitelist", "Headers": ["X-Deneb-Token"]}
 
 
 def test_deployment_updates_static_files_and_invalidates_cloudfront(foundation):
@@ -170,16 +178,22 @@ def test_generated_resource_dependencies_have_no_cycles(foundation):
         visit(name, set())
 
 
-def test_lambda_asset_contains_source_only_not_local_bytecode(assembly):
+def test_lambda_asset_contains_source_and_locked_sdk_not_local_state(assembly):
     root = Path(assembly.directory)
     health_assets = []
     for manifest in root.glob("*.assets.json"):
         for asset in json.loads(manifest.read_text())["files"].values():
             source = root / asset["source"]["path"]
-            if source.is_dir() and (source / "handler.py").is_file():
+            if source.is_dir() and (source / "backend" / "telemetry" / "handler.py").is_file():
                 health_assets.append(source)
     assert len(health_assets) == 1
-    assert {path.name for path in health_assets[0].iterdir()} == {"handler.py"}
+    asset = health_assets[0]
+    assert (asset / "boto3" / "__init__.py").is_file()
+    assert (asset / "botocore" / "__init__.py").is_file()
+    assert not list(asset.rglob("*.pyc"))
+    assert not (asset / ".aws").exists()
+    assert not (asset / "web").exists()
+    assert not (asset / "aws_cdk").exists()
 
 
 def test_app_uses_dedicated_bootstrap_and_bounds_every_runtime_role(assembly, foundation):
@@ -191,3 +205,50 @@ def test_app_uses_dedicated_bootstrap_and_bounds_every_runtime_role(assembly, fo
         assert "delta-deneb-runtime-boundary-dev" in json.dumps(role["Properties"]["PermissionsBoundary"])
     _, distribution = only(foundation, "AWS::CloudFront::Distribution")
     assert {tag["Key"]: tag["Value"] for tag in distribution["Properties"]["Tags"]} == {"Project": "delta-deneb", "Environment": "dev"}
+
+
+def test_new_telemetry_table_is_retained_and_uses_uuid_identity_and_receipt_index(foundation):
+    _, table = only(foundation, "AWS::DynamoDB::Table")
+    props = table["Properties"]
+    assert props["TableName"] == "delta-deneb-dev-telemetry"
+    assert props["BillingMode"] == "PAY_PER_REQUEST"
+    assert props["KeySchema"] == [{"AttributeName": "machine_id", "KeyType": "HASH"}, {"AttributeName": "sample_id", "KeyType": "RANGE"}]
+    index, = props["GlobalSecondaryIndexes"]
+    assert index["IndexName"] == "by-machine-received-at"
+    assert index["KeySchema"][-1] == {"AttributeName": "received_at_ms", "KeyType": "RANGE"}
+    assert {entry["AttributeName"]: entry["AttributeType"] for entry in props["AttributeDefinitions"]}["received_at_ms"] == "N"
+    assert table["DeletionPolicy"] == "Retain"
+    assert "TimeToLiveSpecification" not in props
+
+
+def test_iot_rule_stores_only_whitelisted_fields_with_aws_receipt_time(foundation):
+    _, rule = only(foundation, "AWS::IoT::TopicRule")
+    assert rule["Properties"]["RuleName"] == "delta_deneb_dev_telemetry"
+    payload = rule["Properties"]["TopicRulePayload"]
+    assert payload["AwsIotSqlVersion"] == "2016-03-23" and payload["RuleDisabled"] is False
+    assert "FROM 'v0/delta_machine_alpha/telemetry/racing_data'" in payload["Sql"]
+    assert "timestamp() AS received_at_ms" in payload["Sql"]
+    assert "newuuid() AS sample_id" in payload["Sql"]
+    assert "'delta_machine_alpha' AS machine_id" in payload["Sql"]
+    assert "SELECT *" not in payload["Sql"] and "memo" not in payload["Sql"]
+    action, = payload["Actions"]
+    assert "DynamoDBv2" in action
+    role_id = action["DynamoDBv2"]["RoleArn"]["Fn::GetAtt"][0]
+    role = foundation["Resources"][role_id]["Properties"]
+    trust, = role["AssumeRolePolicyDocument"]["Statement"]
+    assert trust["Principal"] == {"Service": "iot.amazonaws.com"}
+    assert "aws:SourceAccount" in trust["Condition"]["StringEquals"]
+    assert "delta_deneb_dev_telemetry" in json.dumps(trust["Condition"]["ArnEquals"])
+    grants = role["Policies"][0]["PolicyDocument"]["Statement"]
+    assert grants[0]["Action"] == "dynamodb:PutItem"
+
+
+def test_viewer_token_is_generated_and_never_exported_as_plaintext(foundation):
+    _, secret = only(foundation, "AWS::SecretsManager::Secret")
+    props = secret["Properties"]
+    assert props["Name"] == "delta-deneb/dev/viewer-token"
+    assert props["GenerateSecretString"] == {"ExcludePunctuation": True, "PasswordLength": 48}
+    assert "SecretString" not in props
+    assert secret["DeletionPolicy"] == "Retain"
+    assert "ViewerSecretArn" in foundation["Outputs"]
+    assert "ViewerToken" not in foundation["Outputs"]

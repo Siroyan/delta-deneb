@@ -25,7 +25,7 @@
 - `web/assets/course.json`: もてぎの表示・経路投影用データ。
 - `web/assets/motegi_demo.json`: 読み込み確認用の戦略。
 
-`web/`の内容をそのまま静的オリジンに配置する。AWS CDK、Lambda、DynamoDB、IoTルールはまだ実装・変更していない。
+`web/`の内容をそのまま静的オリジンに配置する。現在はAWS CDKによる配信基盤と、DynamoDB・IoTルール・取得APIも別途実装している。画面はこの模擬データのままで、実APIへの接続はStep 3で行う。
 
 ## データの由来
 

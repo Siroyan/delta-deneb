@@ -21,6 +21,6 @@ stack = FoundationStack(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
         region="ap-northeast-1",
     ),
-    description="delta-deneb static dashboard and health API foundation (Step 1)",
+    description="delta-deneb dashboard, IoT telemetry storage, and read API (Step 2)",
 )
 app.synth()

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from aws_cdk import CfnOutput, DefaultStackSynthesizer, Duration, RemovalPolicy, Stack, Tags
+from aws_cdk import ArnFormat, CfnOutput, DefaultStackSynthesizer, Duration, RemovalPolicy, Stack, Stage, Tags
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
@@ -10,9 +10,13 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_deployment as deployment
+from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_iot as iot
+from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 from infra.deployment_settings import deployment_settings
+from scripts.package_api import package_api
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +35,53 @@ class FoundationStack(Stack):
         iam.PermissionsBoundary.of(self).apply(boundary)
         Tags.of(self).add("Project", "delta-deneb")
         Tags.of(self).add("Environment", stage)
+
+        self.telemetry_table = dynamodb.Table(
+            self, "TelemetryTable", table_name=settings["telemetry_table"],
+            partition_key=dynamodb.Attribute(name="machine_id", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sample_id", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.DEFAULT,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        self.telemetry_table.add_global_secondary_index(
+            index_name=settings["telemetry_index"],
+            partition_key=dynamodb.Attribute(name="machine_id", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="received_at_ms", type=dynamodb.AttributeType.NUMBER),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+        self.viewer_secret = secretsmanager.Secret(
+            self, "ViewerToken", secret_name=settings["viewer_secret"],
+            generate_secret_string=secretsmanager.SecretStringGenerator(password_length=48, exclude_punctuation=True),
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        rule_arn = self.format_arn(service="iot", resource="rule", resource_name=settings["iot_rule"], arn_format=ArnFormat.SLASH_RESOURCE_NAME)
+        ingest = iam.Role(
+            self, "TelemetryIngestRole", role_name=f"{settings['stack_name']}-telemetry-ingest",
+            assumed_by=iam.ServicePrincipal("iot.amazonaws.com", conditions={
+                "StringEquals": {"aws:SourceAccount": self.account}, "ArnEquals": {"aws:SourceArn": rule_arn},
+            }),
+            inline_policies={"StoreTelemetry": iam.PolicyDocument(statements=[iam.PolicyStatement(
+                actions=["dynamodb:PutItem"], resources=[self.telemetry_table.table_arn],
+                conditions={"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [settings["machine_id"]]}},
+            )])},
+        )
+        self.telemetry_rule = iot.CfnTopicRule(
+            self, "TelemetryRule", rule_name=settings["iot_rule"],
+            topic_rule_payload=iot.CfnTopicRule.TopicRulePayloadProperty(
+                aws_iot_sql_version="2016-03-23", rule_disabled=False,
+                description=f"delta-deneb {stage}: copy telemetry to the dedicated table",
+                sql=("SELECT speed, average_speed, lap_number, total_time_ms, lap_time_ms, "
+                     "latitude, longitude, timestamp_ms, "
+                     f"'{settings['machine_id']}' AS machine_id, "
+                     "timestamp() AS received_at_ms, newuuid() AS sample_id "
+                     f"FROM '{settings['mqtt_topic']}'"),
+                actions=[iot.CfnTopicRule.ActionProperty(dynamo_d_bv2=iot.CfnTopicRule.DynamoDBv2ActionProperty(
+                    role_arn=ingest.role_arn,
+                    put_item=iot.CfnTopicRule.PutItemInputProperty(table_name=self.telemetry_table.table_name),
+                ))],
+            ),
+        )
 
         self.site_bucket = s3.Bucket(
             self,
@@ -54,17 +105,22 @@ class FoundationStack(Stack):
             "HealthApi",
             runtime=lambda_.Runtime.PYTHON_3_13,
             architecture=lambda_.Architecture.ARM_64,
-            handler="handler.handler",
-            code=lambda_.Code.from_asset(
-                str(ROOT / "backend" / "health"),
-                exclude=["__pycache__", "**/__pycache__", "*.pyc", "**/*.pyc", "*.pyo", "**/*.pyo"],
-            ),
-            memory_size=128,
-            timeout=Duration.seconds(5),
-            environment={"STAGE": stage},
+            handler="backend.telemetry.handler.handler",
+            code=lambda_.Code.from_asset(str(package_api(Path(Stage.of(self).outdir) / f"{self.artifact_id}.api-package"))),
+            memory_size=256,
+            timeout=Duration.seconds(30),
+            environment={"STAGE": stage, "TELEMETRY_TABLE": self.telemetry_table.table_name,
+                         "TELEMETRY_INDEX": settings["telemetry_index"], "MACHINE_ID": settings["machine_id"],
+                         "VIEWER_SECRET_ARN": self.viewer_secret.secret_arn},
             log_group=self.api_logs,
-            description="Step 1 health endpoint; no telemetry or DynamoDB access",
+            description="Token-protected, read-only telemetry API and health endpoint",
         )
+        self.api.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:Query"],
+            resources=[self.telemetry_table.table_arn, f"{self.telemetry_table.table_arn}/index/{settings['telemetry_index']}"],
+            conditions={"ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [settings["machine_id"]]}},
+        ))
+        self.viewer_secret.grant_read(self.api)
         self.function_url = self.api.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.AWS_IAM,
         )
@@ -82,7 +138,7 @@ class FoundationStack(Stack):
             self,
             "ApiRequests",
             query_string_behavior=cloudfront.OriginRequestQueryStringBehavior.all(),
-            header_behavior=cloudfront.OriginRequestHeaderBehavior.none(),
+            header_behavior=cloudfront.OriginRequestHeaderBehavior.allow_list("X-Deneb-Token"),
             cookie_behavior=cloudfront.OriginRequestCookieBehavior.none(),
         )
         api_behavior = cloudfront.BehaviorOptions(
@@ -143,3 +199,7 @@ class FoundationStack(Stack):
         CfnOutput(self, "ApiFunctionName", value=self.api.function_name)
         CfnOutput(self, "ApiLogGroupName", value=self.api_logs.log_group_name)
         CfnOutput(self, "FunctionUrl", value=self.function_url.url)
+        CfnOutput(self, "TelemetryTableName", value=self.telemetry_table.table_name)
+        CfnOutput(self, "TelemetryRuleName", value=self.telemetry_rule.ref)
+        CfnOutput(self, "ViewerSecretArn", value=self.viewer_secret.secret_arn)
+        CfnOutput(self, "TelemetryLatestUrl", value=f"{site_url}/api/telemetry/latest")
