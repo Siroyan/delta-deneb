@@ -63,7 +63,17 @@ def test_completed_lap_time_comes_from_next_lap_boundary():
     ]
 
 
-def test_missing_start_or_skipped_lap_never_fabricates_duration():
+def test_first_observed_lap_start_is_derived_even_when_lap_one_is_not_loaded():
+    samples = [
+        sample(lap=2, total=301000, lap_time=1000),
+        sample(lap=3, total=631000, lap_time=1000),
+    ]
+    assert lap_summaries(samples) == [
+        {"lap": 2, "time_ms": 330000, "source": "inferred_transition"},
+    ]
+
+
+def test_skipped_lap_never_fabricates_duration():
     samples = [
         sample(lap=3, total=900000, lap_time=20000),
         sample(lap=5, total=1500000, lap_time=20000),

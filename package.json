@@ -12,7 +12,8 @@
     "synth:offline": "uv run --locked python app.py",
     "prepare:bootstrap": "uv run --locked python -m scripts.prepare_bootstrap",
     "cdk": "cdk",
-    "preview": "uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web"
+    "preview": "uv run --locked python -m http.server 8080 --bind 127.0.0.1 --directory web",
+    "preview:api": "uv run --locked python -m scripts.preview_api"
   },
   "devDependencies": {
     "aws-cdk": "2.1145.0"

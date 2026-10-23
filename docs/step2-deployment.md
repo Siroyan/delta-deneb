@@ -2,7 +2,7 @@
 
 Step 1で公開した同じCloudFront URLとアプリスタックを更新する。すべてのコマンドはDev Container内の`/workspaces/delta-deneb`で、ユーザー自身が実行する。認証情報や閲覧トークンをチャットへ渡す必要はない。
 
-Step 2では新しいDynamoDBとIoTルールを作成する。画面は引き続き模擬データで動作し、実データと共有リンクへの接続はStep 3で行う。
+Step 2では新しいDynamoDBとIoTルールを作成する。この文書はStep 2ブランチの配布手順。画面と共有リンクの接続を含む最新の実装は[Step 3の手順](step3-deployment.md)を参照。
 
 ## 追加する構成
 
@@ -144,7 +144,7 @@ uv run --locked python scripts/check_telemetry.py \
 
 `Stored telemetry was read successfully`まで成功することが、Step 2の実環境での完了条件。GSIは結果整合性のため、送信直後は少し待って再確認する。[DynamoDB Queryの整合性と制限](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html)を参照。
 
-Profileを指定しなければ、手元で保管したトークンを非表示で入力する方法も使える。APIは`X-Deneb-Token`ヘッダーを使用する。トークンをクエリ文字列へ付ける方式は受け付けない。Step 3では共有URLのフラグメント（`#token=...`）から読み取り、JavaScriptがこのヘッダーへ設定する予定。現在のUIはまだフラグメントを使用せず、模擬データを表示する。
+Profileを指定しなければ、手元で保管したトークンを非表示で入力する方法も使える。APIは`X-Deneb-Token`ヘッダーを使用する。トークンをクエリ文字列へ付ける方式は受け付けない。Step 3では共有URLのフラグメント（`#token=...`）から読み取り、JavaScriptがこのヘッダーへ設定する。Step 2ブランチのUIは模擬データを表示する。
 
 ## 保存形式と取得API
 
@@ -173,7 +173,7 @@ Step 3では最新値を定期取得し、履歴は差分、ラップ一覧は�
 
 - ラップAPIでは、取得範囲内の起動後時間・レース経過・周回数の減少を新しい走行または補正として扱い、それ以前のサンプルを除く。この判定は推定で、正式な走行IDではない。
 - 履歴APIは指定した時間範囲の記録を返す。複数走行を含む場合もあるため、Step 3で走行の区切りを扱う。
-- 次の周回の`total_time_ms - lap_time_ms`を境界時刻として使う。必要な開始境界が分からない場合や周回が飛んだ場合は、ラップ時間を`null`にする。最後に観測したサンプルのラップ時間を確定値として使わない。
+- 次の周回の`total_time_ms - lap_time_ms`を境界時刻として使う。最初に観測した周回も`total_time_ms - lap_time_ms`から開始境界を求める。周回が飛んだ場合など、対応する境界を観測できないラップ時間は`null`にする。最後に観測したサンプルのラップ時間を確定値として使わない。
 - 算出したラップは`source: inferred_transition`。`truncated: true`の場合は上限で読み取りを打ち切ったため、全履歴ではない。期間を狭めて再取得する。
 - 送信停止だけで完走とは判定しない。`finish_confirmed`は現状`false`。最終周回の確定と取消・手動補正を正確に扱うには、今後、送信側の走行ID・状態・イベントを含めた契約を決める。
 
@@ -191,6 +191,6 @@ Step 3では最新値を定期取得し、履歴は差分、ラップ一覧は�
 
 2026-10-18にARM64のDev Container用イメージでPython側95件、既存JavaScript側16件が成功した。アプリと`dev`・`prod`の配布基盤テンプレートを生成し、`cfn-lint 1.57.2`で静的検証した。アプリはCDK由来の既存のW3005警告のみを除外した。配布パッケージはsite-packagesを無効にしたPythonでもSDKとハンドラーを読み込めることを確認した。これらはAWS上での権限評価やIoTルールの実行成功を示すものではない。
 
-実データがAPIから取得できたら、Step 3で現在の画面へ接続する。共有リンクの読み込み、取得中断と再開、古いデータの表示、過去の走行結果の選択を画面側で実装する。
+画面の接続・共有リンク・取得中断と再開・古いデータの表示・過去結果の選択は、[Step 3](step3-deployment.md)で実装済み。実機が使えない間は模擬HTTP APIで確認し、取り込みを含む動作確認を後で行う。
 
 参考: [AWS IoTのDynamoDBv2アクション](https://docs.aws.amazon.com/iot/latest/developerguide/dynamodb-v2-rule-action.html)、[IoT SQLの関数](https://docs.aws.amazon.com/iot/latest/developerguide/iot-sql-functions.html)、[IoTルールのIAMロール](https://docs.aws.amazon.com/iot/latest/developerguide/iot-create-role.html)、[LambdaのPython配布パッケージ](https://docs.aws.amazon.com/lambda/latest/dg/python-package.html)。

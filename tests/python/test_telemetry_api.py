@@ -149,6 +149,18 @@ def test_head_preserves_status_without_returning_a_body(ddb):
     assert result["statusCode"] == 200 and result["body"] == ""
 
 
+def test_lap_three_retains_lap_two_duration_when_lap_one_is_outside_the_window(ddb):
+    ddb.add_response("query", {"Items": [
+        item("lap3", received=NOW, lap=3, total=631000, lap_time=1000, uptime=751000),
+        item("lap2", received=NOW - 330000, lap=2, total=301000, lap_time=1000, uptime=421000),
+    ]}, expected_query(limit=1000, start=NOW - 7200000, end=NOW))
+    result = api.handler(event("laps"), None)
+    assert result["statusCode"] == 200
+    payload = json.loads(result["body"])
+    assert payload["laps"] == [{"lap": 2, "time_ms": 330000, "source": "inferred_transition"}]
+    assert payload["finish_confirmed"] is False
+
+
 def test_unknown_path_is_404_and_unsupported_method_is_405(ddb):
     assert api.handler(event("missing"), None)["statusCode"] == 404
     assert api.handler(event(method="POST"), None)["statusCode"] == 405

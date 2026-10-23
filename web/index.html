@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6f3">
-  <meta name="description" content="delta-deneb — ピットで走行状況を確認するテレメトリーモニターのデモ">
+  <meta name="description" content="delta-deneb — ピットで走行状況を確認するテレメトリーモニター">
+  <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex, nofollow">
   <title>delta-deneb | ピットモニター</title>
   <link rel="icon" href="./assets/deneb.svg" type="image/svg+xml">
@@ -19,29 +20,30 @@
       <span>delta<span class="brand-separator">/</span><strong>deneb</strong></span>
     </a>
     <span class="header-caption">PIT TELEMETRY</span>
-    <div class="header-right"><span class="demo-badge">DEMO</span><span class="demo-caption">模擬データで動作中</span><button id="fullscreen" class="icon-button" aria-label="全画面表示" title="全画面表示"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button></div>
+    <div class="header-right"><span id="mode-label" class="demo-badge">走行データ</span><span id="mode-description" class="demo-caption">delta-vegaの受信データ</span><button id="fullscreen" class="icon-button" aria-label="全画面表示" title="全画面表示"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button></div>
   </header>
 
   <main id="main" class="page-shell">
     <section class="session-heading" aria-labelledby="page-title">
-      <div><p class="eyebrow">DELTA VEGA <span>/</span> SESSION 01</p><h1 id="page-title">ピットモニター<span class="title-dot">.</span></h1><p class="session-meta"><span>モビリティリゾートもてぎ</span><span class="meta-divider">/</span><span>7 LAPS</span><span class="meta-divider">/</span><span>テスト走行</span></p></div>
+      <div><p class="eyebrow">DELTA VEGA <span>/</span> PIT MONITOR</p><h1 id="page-title">ピットモニター<span class="title-dot">.</span></h1><p class="session-meta"><span>モビリティリゾートもてぎ</span><span class="meta-divider">/</span><span>7 LAPS</span><span class="meta-divider">/</span><span id="session-caption">最新の受信記録</span></p></div>
       <div class="session-controls">
-        <label class="scenario-label" for="scenario">デモシナリオ</label>
-        <select id="scenario"><option value="live">走行中</option><option value="stale">更新停止</option><option value="error">APIエラー</option><option value="gps-missing">GPS欠測</option><option value="empty">データなし</option><option value="finished">ゴール</option></select>
+        <div id="source-controls"><label class="scenario-label" for="data-view">表示する記録</label><select id="data-view"><option value="live">最新の走行</option><option value="archive">過去の期間</option></select></div>
+        <div id="demo-controls" hidden><label class="scenario-label" for="scenario">デモシナリオ</label><select id="scenario"><option value="live">走行中</option><option value="stale">更新停止</option><option value="error">APIエラー</option><option value="gps-missing">GPS欠測</option><option value="empty">データなし</option><option value="finished">ゴール</option></select></div>
+        <div class="connection"><span id="connection-status" class="status-pill" data-status="loading" role="status"><i></i><span id="connection-label">接続中</span></span><span id="last-update" class="update-age">データを取得しています</span></div>
       </div>
     </section>
 
-    <div class="view-bar">
-      <nav class="view-tabs" aria-label="表示切り替え"><button id="live-view" class="view-tab active" aria-pressed="true">ライブ</button><button id="analysis-view" class="view-tab" aria-pressed="false">ラップ分析</button></nav>
-      <div class="connection"><span id="connection-status" class="status-pill" data-status="loading" role="status"><i></i><span id="connection-label">接続中</span></span><span id="last-update" class="update-age">データを取得しています</span></div>
-    </div>
+    <form id="history-form" class="history-form" hidden>
+      <span class="subtle-label">期間を指定（日本時間・最大2時間）</span><label>開始<input id="history-start" type="datetime-local" required></label><label>終了<input id="history-end" type="datetime-local" required></label><button id="history-load" type="submit" class="outline-button">記録を表示</button><label id="archive-run-label" hidden>走行候補<select id="archive-run"></select></label><span id="history-feedback" role="status"></span>
+    </form>
+
     <div id="notice" class="notice" role="status" hidden></div>
 
     <section class="metrics" aria-label="現在の走行データ">
       <article class="metric metric-primary"><div class="metric-label">現在速度 <span>CURRENT SPEED</span></div><div class="metric-reading"><strong id="speed">—</strong><span>km/h</span></div><div class="metric-foot"><span class="metric-rule"></span><span id="speed-note">車輪センサーの計測値</span></div></article>
       <article class="metric"><div class="metric-label">平均速度 <span>AVERAGE SPEED</span></div><div class="metric-reading"><strong id="average-speed">—</strong><span>km/h</span></div><div class="metric-foot"><span id="average-note">走行開始からの平均</span></div></article>
       <article class="metric"><div class="metric-label">現在の周回 <span>LAP</span></div><div class="metric-reading lap-reading"><strong id="lap">—</strong><span>/ 7</span></div><div class="metric-foot"><span id="lap-note">全7周の走行</span><div id="lap-dots" class="lap-dots" aria-hidden="true"></div></div></article>
-      <article class="metric"><div class="metric-label">経過時間 <span>ELAPSED TIME</span></div><div class="metric-reading time-reading"><strong id="elapsed">—:—</strong></div><div class="metric-foot"><span>デモ目標</span><strong>38:30</strong></div></article>
+      <article class="metric"><div class="metric-label">経過時間 <span>ELAPSED TIME</span></div><div class="metric-reading time-reading"><strong id="elapsed">—:—</strong></div><div class="metric-foot"><span>参考目標</span><strong>38:30</strong></div></article>
     </section>
 
     <section class="strategy-bar" aria-labelledby="strategy-title">
@@ -59,42 +61,25 @@
     <div class="dashboard-grid">
       <section class="panel course-panel" aria-labelledby="course-title">
         <div class="panel-header"><div><p class="eyebrow">TRACK POSITION</p><h2 id="course-title">コース上の現在位置</h2></div><span id="gps-status" class="subtle-chip">GPS 待機中</span></div>
-        <div class="course-wrap"><svg id="course-map" viewBox="0 0 350 820" role="img" aria-label="もてぎのコース模式図。現在位置を模擬表示。"><defs><pattern id="map-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#d9e0d7"/></pattern></defs><rect width="350" height="820" fill="url(#map-grid)"/><g id="course-road"></g><g id="course-landmarks"></g><g id="car-marker" hidden><circle class="marker-halo" r="17"/><circle r="9" fill="#236b4f" stroke="#fff" stroke-width="4"/><circle r="2" fill="#fff"/><g class="car-callout" transform="translate(-48,-53)"><rect width="96" height="27" rx="6" fill="#193b2f"/><path d="m42 27 6 6 6-6" fill="#193b2f"/><text x="48" y="18" text-anchor="middle" fill="white">delta-vega</text></g></g></svg><div class="map-north" aria-label="北が上"><svg viewBox="0 0 20 24" aria-hidden="true"><path d="M10 2 4 13h5v9h2v-9h5Z" fill="currentColor"/></svg><span>N</span></div><div class="map-caption">GPS由来のコース模式図</div><div id="map-overlay" class="map-overlay" hidden>GPS位置が取得できません</div></div>
+        <div class="course-wrap"><svg id="course-map" viewBox="0 0 350 820" role="img" aria-label="もてぎのコース模式図。GPSから現在位置を表示。"><defs><pattern id="map-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#d9e0d7"/></pattern></defs><rect width="350" height="820" fill="url(#map-grid)"/><g id="course-road"></g><g id="course-landmarks"></g><g id="car-marker" hidden><circle class="marker-halo" r="17"/><circle r="9" fill="#236b4f" stroke="#fff" stroke-width="4"/><circle r="2" fill="#fff"/><g class="car-callout" transform="translate(-48,-53)"><rect width="96" height="27" rx="6" fill="#193b2f"/><path d="m42 27 6 6 6-6" fill="#193b2f"/><text x="48" y="18" text-anchor="middle" fill="white">delta-vega</text></g></g></svg><div class="map-north" aria-label="北が上"><svg viewBox="0 0 20 24" aria-hidden="true"><path d="M10 2 4 13h5v9h2v-9h5Z" fill="currentColor"/></svg><span>N</span></div><div class="map-caption">GPS由来のコース模式図</div><div id="map-overlay" class="map-overlay" hidden>GPS位置が取得できません</div></div>
       </section>
 
       <div class="dashboard-side">
       <section class="panel chart-panel" aria-labelledby="chart-title">
         <div class="panel-header"><div><p id="chart-eyebrow" class="eyebrow">SPEED HISTORY</p><h2 id="chart-title">速度の推移</h2></div><div id="chart-ranges" class="segmented" role="group" aria-label="グラフの表示範囲"><button data-range="60" aria-pressed="false">1分</button><button data-range="300" class="active" aria-pressed="true">5分</button><button data-range="all" aria-pressed="false">全体</button></div></div>
-        <div class="chart-legend"><span><i class="legend-line"></i>速度</span><span><i class="legend-line target"></i>デモ目標の平均速度</span><span class="chart-unit">km/h</span></div>
-        <div class="chart-wrap"><svg id="speed-chart" viewBox="0 0 850 225" role="img" aria-label="模擬走行の速度グラフ"></svg><div id="chart-empty" class="chart-empty" hidden>走行データがありません</div></div>
+        <div class="chart-legend"><span><i class="legend-line"></i>速度</span><span><i class="legend-line target"></i>参考目標の平均速度</span><span id="history-status" class="subtle-label"></span><span class="chart-unit">km/h</span></div>
+        <div class="chart-wrap"><svg id="speed-chart" viewBox="0 0 850 225" role="img" aria-label="走行データの速度グラフ"></svg><div id="chart-empty" class="chart-empty" hidden>走行データがありません</div></div>
       </section>
 
       <section class="panel laps-panel" aria-labelledby="laps-title">
         <div class="panel-header"><div><p class="eyebrow">LAP TIMING</p><h2 id="laps-title">ラップタイム</h2></div><span id="laps-summary" class="subtle-label">— / 7 周完了</span></div>
         <div class="lap-current-summary"><span>現在のラップタイム</span><strong id="current-lap-time">—:—</strong></div>
-        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th scope="col">デモ目標との差</th><th scope="col"><span class="sr-only">分析</span></th></tr></thead><tbody id="lap-rows"></tbody></table></div>
-        <div class="laps-footer"><span class="best-mark"></span><span>最速ラップ</span><span class="table-hint">行を選択して分析 <span aria-hidden="true">↗</span></span></div>
+        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th scope="col">参考目標との差</th></tr></thead><tbody id="lap-rows"></tbody></table></div>
+        <div class="laps-footer"><span class="best-mark"></span><span>最速ラップ</span></div>
       </section>
 
-      <section class="panel summary-panel" aria-labelledby="summary-title">
-        <div class="panel-header"><div><p class="eyebrow">RACE PROGRESS</p><h2 id="summary-title">走行の進み具合</h2></div><span class="subtle-label">16.39 km</span></div>
-        <div class="progress-reading"><strong id="progress-percent">—<small>%</small></strong><span id="remaining-distance">残り — km</span></div><div class="progress-track"><div id="progress-fill"></div></div>
-        <div class="summary-estimates"><div><span>走行距離 <small>推定</small></span><strong id="distance">— km</strong></div><div><span>ゴール予測 <small>参考</small></span><strong id="finish-estimate">—:—</strong></div><div class="pace-cell"><span>デモ目標との差</span><strong id="target-delta">—</strong></div></div>
-        <div class="summary-detail-grid">
-        <div class="summary-detail"><span>目標平均速度 <small>デモ設定</small></span><strong id="target-average">25.5 <small>km/h</small></strong></div>
-        <div class="summary-detail"><span>データ受信時刻</span><strong id="received-time">—:—:—</strong></div>
-        <div class="summary-detail"><span>車両</span><strong>pi <small>/ delta-vega</small></strong></div>
-        </div>
-        <p class="estimate-note">距離・予測は参考値です。公式結果ではありません。</p>
-      </section>
       </div>
     </div>
-
-    <section id="lap-analysis" class="panel analysis-panel" aria-labelledby="analysis-title" hidden>
-      <div class="panel-header"><div><p class="eyebrow">LAP DETAIL</p><h2 id="analysis-title">ラップを比較する</h2></div><label class="analysis-select-label">表示ラップ<select id="analysis-lap" aria-label="分析するラップ"></select></label></div>
-      <div class="analysis-metrics"><div><span>ラップタイム</span><strong id="analysis-time">—:—</strong></div><div><span>平均速度</span><strong id="analysis-average">—<small> km/h</small></strong></div><div><span>デモ目標との差</span><strong id="analysis-delta">—</strong></div></div>
-      <div class="chart-legend"><span><i class="legend-line"></i>選択ラップの速度</span><span class="chart-unit">km/h</span></div><div class="chart-wrap analysis-chart"><svg id="lap-chart" viewBox="0 0 1100 280" role="img" aria-label="選択したラップの速度グラフ"></svg></div><p id="analysis-note" class="estimate-note">完了したラップを選択すると、速度とタイムを確認できます。</p>
-    </section>
 
     <footer class="page-footer"><span><i class="footer-dot"></i>delta-deneb <span class="footer-divider">/</span> ピットのためのテレメトリー</span><div><span class="poll-note">3秒ごとに自動更新</span><button id="export-csv" class="text-button" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>CSVを保存</button></div></footer>
     <noscript><p class="notice">このモニターにはJavaScriptが必要です。</p></noscript>

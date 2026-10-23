@@ -23,21 +23,15 @@ export function receiveClock(ms) {
 }
 
 export function connectionState({ response, error, now = Date.now() }) {
+  if (error?.code === 'missing_token') return 'locked';
+  if (error?.status === 401) return 'unauthorized';
   if (error) return 'error';
   if (!response) return 'loading';
   if (!response.latest) return 'empty';
+  if (response.archived) return 'archived';
+  now += response.clock_offset_ms || 0;
   if (now - response.received_at_ms > STALE_MS) return 'stale';
   return response.phase === 'finished' ? 'finished' : 'live';
-}
-
-export function estimates(response, course) {
-  if (!response?.latest || !(response.latest.average_speed > 0)) return null;
-  const data = response.latest;
-  // distance is not currently included in delta-vega MQTT; derive it explicitly.
-  const distance = Math.min(course.length_m, data.average_speed * data.total_time_ms / 3600);
-  const remaining = Math.max(0, course.length_m - distance);
-  const finishMs = response.phase === 'finished' ? data.total_time_ms : data.total_time_ms + remaining / data.average_speed * 3600;
-  return { distance, remaining, progress: distance / course.length_m * 100, finishMs, deltaMs: finishMs - TARGET_MS };
 }
 
 export function csvText(history) {
