@@ -8,6 +8,84 @@ Step 1の配信基盤はユーザーの手元でデプロイ・確認済み。St
 - リポジトリ: https://github.com/Siroyan/delta-deneb
 - コンテナ内の作業フォルダ: `/workspaces/delta-deneb`
 
+## デプロイ方法（既存のdev環境を更新する）
+
+今回の確定ラップ対応をAWSへ反映する手順。**以下はすべて、ユーザー自身がDev Container内のターミナルで実行する。** 対象リージョンはTokyo（`ap-northeast-1`）、CDK上の対象は`DeltaDenebDev`、CloudFormationのスタック名は`delta-deneb-dev`。
+
+専用配布基盤とStep 2のデプロイが済んでいることを前提とする。初回構築の場合は[配布基盤の準備](docs/bootstrap.md)と[Step 2の手順](docs/step2-deployment.md)を先に行う。以下のProfile名`delta-deneb-login`は、手元で設定した名前が異なる場合は置き換える。
+
+### 1. コードを更新し、テストする
+
+VS Codeでリポジトリを開き、「Dev Containers: Reopen in Container」を実行してから進める。未コミットの変更がある場合は、内容を確認してからブランチを切り替える。
+
+```sh
+cd /workspaces/delta-deneb
+git fetch origin
+git switch codex/mqtt-completed-laps
+git pull --ff-only
+uv sync --locked
+npm ci
+npm test
+npm run test:infra
+npm run synth:offline
+```
+
+現在の確定ラップ対応は`codex/mqtt-completed-laps`にある。テストとオフラインsynthはAWSへ接続しない。
+
+### 2. AWSへログインし、デプロイ先を確認する
+
+```sh
+aws login --profile delta-deneb-login --remote
+aws sts get-caller-identity --profile delta-deneb-login --region ap-northeast-1
+```
+
+案内されたURLを手元のブラウザで開いて認証する。続くコマンドの結果で、意図したAWSアカウントと専用デプロイユーザーを使用していることを確認する。Profileの準備がまだの場合は[認証設定の手順](docs/step1-deployment.md)を参照。認証情報をチャットやリポジトリへ渡す必要はない。
+
+### 3. 差分を確認してデプロイする
+
+```sh
+npm run cdk -- diff DeltaDenebDev --profile delta-deneb-login
+```
+
+今回の主な更新対象は、静的画面・Lambdaコード・CDK管理の専用IoTルールのSELECT（`completed_lap_times_ms`の追加）。DynamoDBの作り直しやデータ移行は不要で、専用IoTルールのコンソールでの手動編集も不要。意図しないリソースの削除・置換がないことを確認してから実行する。
+
+```sh
+npm run cdk -- deploy DeltaDenebDev --profile delta-deneb-login --outputs-file cdk-outputs.dev.json
+```
+
+確認が表示されたら差分を確認して承認し、デプロイの完了を待つ。更新のためにスタックを削除する必要はない。出力先の`cdk-outputs.dev.json`は、以降の確認と共有リンク作成に使う。
+
+### 4. 配信とAPIを確認する
+
+```sh
+uv run --locked python scripts/check_deployment.py --outputs cdk-outputs.dev.json --step 2
+uv run --locked python scripts/check_telemetry.py --outputs cdk-outputs.dev.json --profile delta-deneb-login
+```
+
+画面・ヘルスチェック・オリジンへの直接アクセス拒否と、トークン付きAPIの疎通を確認する。ヘルスチェックの`step: 2`はAPI契約の段階を示すため、今回の更新後も2のまま。
+
+`WAIT No stored telemetry yet; ingestion is not verified`は、APIには接続できているがデータの取り込みは未確認という意味。実機が使えない間はここまで進められる。旧データに新項目がない場合の`WAIT Legacy sample...`も、新形式の取り込みが未確認であることを示す。
+
+更新済みのdelta-vegaから新しいメッセージを送信できたら、次を実行する。
+
+```sh
+uv run --locked python scripts/check_telemetry.py --outputs cdk-outputs.dev.json --profile delta-deneb-login --require-data --require-completed-laps
+```
+
+`Device completed-lap array is available`と`Stored telemetry was read successfully`の成功を確認する。待機・開始直後の空配列`[]`も新形式として有効。旧レコードへ項目が遡って追加されることはないため、更新後の新しい受信データで確認する。GSIへの反映に少し時間がかかる場合は、待って再実行する。
+
+### 5. 共有リンクで画面を開く
+
+```sh
+uv run --locked python scripts/share_link.py --outputs cdk-outputs.dev.json --profile delta-deneb-login
+```
+
+出力された`https://……cloudfront.net/#token=……`をブラウザで開く。既存の共有リンクも、URLと閲覧トークンを変更していなければそのまま使える。配信反映後はブラウザを再読み込みする。
+
+このコマンドは閲覧用Secretを読み、共有リンクを手元のターミナルへ表示する。リンク自体が閲覧権限を持つため、公開Issue・リポジトリ・チャットへ貼らず、閲覧メンバーに共有する。
+
+画面で現在値と確定ラップを車載表示に照合する。取消で一覧が消えること、再開始で前の計測が混ざらないこと、完走時に最終周が含まれることも確認する。詳しい受け入れ項目と制約は[確定ラップ表示の仕様](docs/mqtt-completed-laps.md)、画面操作とローカル確認は[Step 3の手順](docs/step3-deployment.md)を参照。
+
 ## AWS配信基盤（Step 1）
 
 非公開S3、CloudFront標準URL、IAM認証のLambda Function URL、Pythonの`GET /api/health`、ログをCDKで定義している。Tokyo (`ap-northeast-1`) を使用し、アカウントID・認証情報をコードに固定しない。
@@ -21,7 +99,7 @@ Step 1の配信基盤はユーザーの手元でデプロイ・確認済み。St
 - 新しい`delta-deneb-dev-telemetry`テーブルと専用IoTルールで、既存トピックのデータを保存する。AWS受信時刻とUUIDを追加し、機器の`timestamp_ms`と区別する。
 - 最新値・時刻範囲の履歴・車両確定ラップ情報を、同一オリジンの`/api/telemetry/*`から取得する。全件Scanは使わず、GSIへのQueryと件数・期間の上限を設ける。
 - 閲覧トークンはSecrets Managerで生成・保存し、APIは`X-Deneb-Token`ヘッダーを検証する。Step 3のUIは共有リンクのフラグメントからヘッダーへ渡す。
-- 新しいテーブルとSecretは保持する。既存のIoTルールや保存先は変更せず、過去データの自動移行は行わない。
+- 新しいテーブルとSecretは保持する。従来から別途使用しているIoTルールや保存先は変更せず、過去データの自動移行は行わない。
 
 デプロイ後は、ユーザー自身のProfileで次を実行する。トークンは表示せず、メモリ内だけで使用する。
 
@@ -55,10 +133,10 @@ npm ci
 
 [Step 3のデプロイ手順](docs/step3-deployment.md)に、画面更新・共有リンク作成・実機なしでの確認方法をまとめた。通常の画面は実APIを使い、`#token=…`付きの共有リンクからログインなしで開く。トークンなし・APIエラー・データなしを模擬走行で埋めない。
 
-- 最新値を3秒間隔で取得し、履歴・ラップの応答が遅い場合も最新値の表示と取得を続ける。受信から10秒を超えると更新停止を表示する。通信断では最後の値を残して自動再試行する。
+- 最新値と確定ラップを3秒間隔で取得し、速度履歴の応答が遅い場合も表示と取得を続ける。走行中は受信から10秒を超えると更新停止を表示する。待機・完走は経過時間だけで更新停止に変えない。通信断では最後の値を残して自動再試行する。
 - 過去の期間を日本時間で最大2時間指定し、推定した走行候補の切り替え・CSV保存ができる。
-- 履歴はページ分割と差分更新、ラップ一覧は初回・周回変更時などに取得する。GPS欠測・部分取得・無効リンクを明示する。
-- 同じ走行の取得済みラップタイムは、周回変更時の部分取得や履歴上限で消さない。各周の開始時刻を経過時間とラップ時間の差から求め、新しい走行では保持値をリセットする。
+- 速度履歴はページ分割と差分更新を使う。GPS欠測・部分取得・無効リンクを明示する。
+- 確定ラップは最新メッセージの全件配列へ毎回置き換え、履歴からの逆算や過去の取得値による補完はしない。取消・再開始では新しい空配列を表示する。
 - ラップ時間は最新メッセージの`completed_lap_times_ms`を表示し、最終周を含むときに完走と判定する。走行区切りは受信カウンターによる推定。
 
 実機なしで本番と同じ画面取得処理を確認するには、次を起動する。AWSへの接続は不要。
