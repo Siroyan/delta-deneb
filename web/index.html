@@ -25,7 +25,7 @@
 
   <main id="main" class="page-shell">
     <section class="session-heading" aria-labelledby="page-title">
-      <div><p class="eyebrow">DELTA VEGA <span>/</span> PIT MONITOR</p><h1 id="page-title">ピットモニター<span class="title-dot">.</span></h1><p class="session-meta"><span>モビリティリゾートもてぎ</span><span class="meta-divider">/</span><span>7 LAPS</span><span class="meta-divider">/</span><span id="session-caption">最新の受信記録</span></p></div>
+      <div><p class="eyebrow">DELTA VEGA <span>/</span> PIT MONITOR</p><h1 id="page-title">ピットモニター<span class="title-dot">.</span></h1><p class="session-meta"><span>モビリティリゾートもてぎ</span><span class="meta-divider">/</span><span id="session-caption">最新の受信記録</span></p></div>
       <div class="session-controls">
         <div id="source-controls"><label class="scenario-label" for="data-view">表示する記録</label><select id="data-view"><option value="live">最新の走行</option><option value="archive">過去の期間</option></select></div>
         <div id="demo-controls" hidden><label class="scenario-label" for="scenario">デモシナリオ</label><select id="scenario"><option value="live">走行中</option><option value="stale">更新停止</option><option value="error">APIエラー</option><option value="gps-missing">GPS欠測</option><option value="empty">データなし</option><option value="finished">ゴール</option></select></div>
@@ -42,8 +42,8 @@
     <section class="metrics" aria-label="現在の走行データ">
       <article class="metric metric-primary"><div class="metric-label">現在速度 <span>CURRENT SPEED</span></div><div class="metric-reading"><strong id="speed">—</strong><span>km/h</span></div><div class="metric-foot"><span class="metric-rule"></span><span id="speed-note">車輪センサーの計測値</span></div></article>
       <article class="metric"><div class="metric-label">平均速度 <span>AVERAGE SPEED</span></div><div class="metric-reading"><strong id="average-speed">—</strong><span>km/h</span></div><div class="metric-foot"><span id="average-note">走行開始からの平均</span></div></article>
-      <article class="metric"><div class="metric-label">現在の周回 <span>LAP</span></div><div class="metric-reading lap-reading"><strong id="lap">—</strong><span>/ 7</span></div><div class="metric-foot"><span id="lap-note">全7周の走行</span><div id="lap-dots" class="lap-dots" aria-hidden="true"></div></div></article>
-      <article class="metric"><div class="metric-label">経過時間 <span>ELAPSED TIME</span></div><div class="metric-reading time-reading"><strong id="elapsed">—:—</strong></div><div class="metric-foot"><span>参考目標</span><strong>38:30</strong></div></article>
+      <article class="metric"><div class="metric-label">現在の周回 <span>LAP</span></div><div class="metric-reading lap-reading"><strong id="lap">—</strong></div><div class="metric-foot"><span id="lap-note">走行データを待っています</span><div id="lap-dots" class="lap-dots" aria-hidden="true"></div></div></article>
+      <article class="metric"><div class="metric-label">経過時間 <span>ELAPSED TIME</span></div><div class="metric-reading time-reading"><strong id="elapsed">—:—</strong></div><div class="metric-foot"><span id="total-target-label">参考目標</span><strong id="total-target">38:30</strong></div></article>
     </section>
 
     <section class="strategy-bar" aria-labelledby="strategy-title">
@@ -67,14 +67,14 @@
       <div class="dashboard-side">
       <section class="panel chart-panel" aria-labelledby="chart-title">
         <div class="panel-header"><div><p id="chart-eyebrow" class="eyebrow">SPEED HISTORY</p><h2 id="chart-title">速度の推移</h2></div><div id="chart-ranges" class="segmented" role="group" aria-label="グラフの表示範囲"><button data-range="60" aria-pressed="false">1分</button><button data-range="300" class="active" aria-pressed="true">5分</button><button data-range="all" aria-pressed="false">全体</button></div></div>
-        <div class="chart-legend"><span><i class="legend-line"></i>速度</span><span><i class="legend-line target"></i>参考目標の平均速度</span><span id="history-status" class="subtle-label"></span><span class="chart-unit">km/h</span></div>
+        <div class="chart-legend"><span><i class="legend-line"></i>速度</span><span><i class="legend-line target"></i><span id="chart-target-label">参考目標の平均速度</span></span><span id="history-status" class="subtle-label"></span><span class="chart-unit">km/h</span></div>
         <div class="chart-wrap"><svg id="speed-chart" viewBox="0 0 850 225" role="img" aria-label="走行データの速度グラフ"></svg><div id="chart-empty" class="chart-empty" hidden>走行データがありません</div></div>
       </section>
 
       <section class="panel laps-panel" aria-labelledby="laps-title">
-        <div class="panel-header"><div><p class="eyebrow">LAP TIMING</p><h2 id="laps-title">ラップタイム</h2></div><span id="laps-summary" class="subtle-label">— / 7 周完了</span></div>
+        <div class="panel-header"><div><p class="eyebrow">LAP TIMING</p><h2 id="laps-title">ラップタイム</h2></div><span id="laps-summary" class="subtle-label">受信待ち</span></div>
         <div class="lap-current-summary"><span>現在のラップタイム</span><strong id="current-lap-time">—:—</strong></div>
-        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th scope="col">参考目標との差</th></tr></thead><tbody id="lap-rows"></tbody></table></div>
+        <div class="table-scroll"><table class="lap-table"><thead><tr><th scope="col">LAP</th><th scope="col">タイム</th><th id="lap-target-heading" scope="col" hidden>戦略目標 / 差</th><th scope="col">状態</th></tr></thead><tbody id="lap-rows"></tbody></table></div>
         <div class="laps-footer"><span class="best-mark"></span><span>最速ラップ</span></div>
       </section>
 

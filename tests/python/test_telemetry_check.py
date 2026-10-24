@@ -65,3 +65,26 @@ def test_cli_failure_does_not_expose_stdout_or_stderr():
     with pytest.raises(ValueError) as failure:
         read_viewer_token("delta-deneb-login", "example-secret", run=run)
     assert TOKEN not in str(failure.value) and "private details" not in str(failure.value)
+
+
+def test_checker_detects_an_iot_rule_that_still_drops_the_new_field():
+    sample = {"machine_id": "delta_machine_alpha", "received_at_ms": 1800000000000}
+    with pytest.raises(ValueError, match="update the IoT rule and firmware"):
+        check_telemetry(OUTPUTS, TOKEN, request=request_factory(sample=sample), require_completed_laps=True)
+    for times in ([], [362000, 358000], [0] * 100):
+        result = check_telemetry(OUTPUTS, TOKEN, request=request_factory(sample=sample | {"completed_lap_times_ms": times}), require_completed_laps=True)
+        assert "Device completed-lap array is available" in result
+    for times in ("[]", [True], [-1], [1.5], [0] * 101, [2**53]):
+        with pytest.raises(ValueError):
+            check_telemetry(OUTPUTS, TOKEN, request=request_factory(sample=sample | {"completed_lap_times_ms": times}), require_completed_laps=True)
+
+
+def test_latest_sample_is_sufficient_even_before_history_index_backfill():
+    sample = {"machine_id": "delta_machine_alpha", "received_at_ms": 1800000000000, "completed_lap_times_ms": []}
+    delegate = request_factory(sample=sample)
+    def request(url, token):
+        result = delegate(url, token)
+        if "/history" in url:
+            return Response(200, result.headers, json.dumps({"history": [], "next_cursor": None, "invalid_items": 0}).encode())
+        return result
+    assert check_telemetry(OUTPUTS, TOKEN, request=request, require_completed_laps=True)[-1] == "Stored telemetry was read successfully"

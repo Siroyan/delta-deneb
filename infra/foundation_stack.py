@@ -72,7 +72,7 @@ class FoundationStack(Stack):
                 aws_iot_sql_version="2016-03-23", rule_disabled=False,
                 description=f"delta-deneb {stage}: copy telemetry to the dedicated table",
                 sql=("SELECT speed, average_speed, lap_number, total_time_ms, lap_time_ms, "
-                     "latitude, longitude, timestamp_ms, "
+                     "latitude, longitude, timestamp_ms, completed_lap_times_ms, "
                      f"'{settings['machine_id']}' AS machine_id, "
                      "timestamp() AS received_at_ms, newuuid() AS sample_id "
                      f"FROM '{settings['mqtt_topic']}'"),

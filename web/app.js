@@ -1,7 +1,8 @@
 import { createMockApi } from './js/mock-api.js';
-import { decimal, duration, deltaDuration, receiveClock, connectionState, csvText, TARGET_MS, POLL_MS } from './js/format.js';
+import { decimal, duration, deltaDuration, receiveClock, connectionState, csvText, POLL_MS } from './js/format.js';
 import { courseMapPoint, drawCourse, drawSpeedChart } from './js/charts.js';
 import { initializeStrategy } from './js/strategy-ui.js';
+import { strategyTargets } from './js/strategy-targets.js';
 import { ApiError, createTelemetryApi, readViewerToken, retryDelay, snapshot, toTokyoInput, fromTokyoInput } from './js/telemetry-api.js';
 
 const $ = id => document.getElementById(id);
@@ -52,7 +53,7 @@ function modeLabels() {
 function renderConnection() {
   const state = archiveMode && !historyLoading && !response && !requestError ? 'select-period' : connectionState({ response, error: requestError });
   const age = response?.latest ? Math.max(0, Math.floor((Date.now() + (response.clock_offset_ms || 0) - response.received_at_ms) / 1000)) : null;
-  const labels = { loading: '読み込み中', 'select-period': '期間を選択', live: 'LIVE · 通信正常', stale: '更新停止', error: '取得エラー', empty: 'データ待ち', finished: 'FINISHED', locked: '共有リンクが必要', unauthorized: 'リンクを確認', archived: '過去の記録' };
+  const labels = { loading: '読み込み中', 'select-period': '期間を選択', live: 'LIVE · 通信正常', stale: '更新停止', error: '取得エラー', empty: 'データ待ち', waiting: '計測待機中', finished: 'FINISHED', locked: '共有リンクが必要', unauthorized: 'リンクを確認', archived: '過去の記録' };
   $('connection-status').dataset.status = state;
   // Only announce state transitions, not the ticking data age.
   if (state !== previousStatus) { setText('connection-label', labels[state]); previousStatus = state; }
@@ -64,10 +65,12 @@ function renderConnection() {
   if (state === 'empty') { message = archiveMode ? 'この期間に走行データはありません。日時を変えて確認してください。' : 'まだ走行データがありません。データの受信を待っています。'; kind = 'info'; }
   if (state === 'locked') { message = '管理者から受け取った閲覧用の共有リンクを開いてください。'; kind = 'info'; }
   if (state === 'unauthorized') { message = 'この共有リンクは使用できません。管理者から新しいリンクを受け取って開いてください。'; kind = 'error'; }
-  if (state === 'archived') { message = '過去の受信記録を表示しています。走行の区切りとラップタイムは推定です。完走の確定はできません。'; kind = 'info'; }
-  if (state === 'finished') { message = '模擬走行が終了しました。タイムを確認できます。'; kind = 'info'; }
+  if (state === 'archived') { message = '過去の受信記録を表示しています。走行の区切りは受信カウンターから推定しています。' + (response.lap_times_available ? 'ラップタイムは車両の確定値です。' : '旧形式のため確定ラップは未取得です。'); kind = 'info'; }
+  if (state === 'finished') { message = demoMode ? '模擬走行が終了しました。タイムを確認できます。' : '車両から完走結果を受信しました。最終周を含む確定タイムを表示しています。'; kind = 'info'; }
+  if (state === 'waiting') { message = '車両は計測待機中です。確定ラップはありません。'; kind = 'info'; }
   if (response?.latest && !response.position && state === 'live') { message = response.latest.latitude == null ? 'GPS位置が取得できません。速度とタイムは引き続き更新しています。' : 'GPS位置がコースから離れています。速度とタイムは引き続き更新しています。'; kind = 'warning'; }
-  if (!message && response?.warnings?.length) message = '履歴やラップの一部を取得できていません。取得済みの記録を表示しています。';
+  if (!message && response?.warnings?.includes('latest_unavailable')) message = '最新データを確認できません。最後に取得した受信内容を表示しています。';
+  if (!message && response?.warnings?.length) message = '速度履歴の一部を取得できていません。現在値とラップ一覧は最新の受信内容です。';
   $('notice').hidden = !message;
   $('notice').dataset.kind = kind;
   if (message) setText('notice', message);
@@ -78,17 +81,15 @@ function renderMetrics() {
   const data = response?.latest;
   setText('speed', decimal(data?.speed));
   setText('average-speed', decimal(data?.average_speed));
-  setText('lap', data?.lap_number ?? '—');
+  setText('lap', data?.lap_number || '—');
   setText('elapsed', duration(data?.total_time_ms));
-  setText('current-lap-time', duration(data?.lap_time_ms));
-  setText('lap-note', data ? response.phase === 'finished' ? '全周回を完了' : archiveMode || stateIsOld() ? `${data.lap_number}周目の受信記録` : `${data.lap_number}周目を走行中` : '全7周の走行');
+  const targets = strategyTargets(strategyUi?.getPlan());
+  setText('total-target-label', targets.explicit ? '戦略目標' : '参考目標');
+  setText('total-target', duration(targets.total_ms));
+  setText('current-lap-time', response?.phase === 'waiting' ? '—:—' : duration(data?.lap_time_ms));
+  setText('lap-note', data ? response.phase === 'waiting' ? '計測開始を待っています' : response.phase === 'finished' ? `${data.lap_number}周を完了` : archiveMode || stateIsOld() ? `${data.lap_number}周目の受信記録` : `${data.lap_number}周目を走行中` : '走行データを待っています');
   setText('speed-note', data && data.speed == null ? '速度データが欠測しています' : response?.phase === 'finished' ? '走行終了' : '車輪センサーの計測値');
-  const dots = Array.from({ length: 7 }, (_, index) => {
-    const dot = document.createElement('i');
-    dot.className = data && (index + 1 < data.lap_number || response.phase === 'finished') ? 'complete' : data && index + 1 === data.lap_number ? 'current' : '';
-    return dot;
-  });
-  $('lap-dots').replaceChildren(...dots);
+  $('lap-dots').replaceChildren();
   const hasPosition = data && data.latitude != null && data.longitude != null && response.position;
   $('car-marker').toggleAttribute('hidden', !hasPosition);
   if (hasPosition) {
@@ -113,9 +114,12 @@ function renderMetrics() {
 function renderLaps() {
   const completed = response?.laps ?? [];
   const data = response?.latest;
-  const bestLap = completed.filter(lap => Number.isFinite(lap.time_ms) && lap.time_ms > 0).reduce((best, lap) => !best || lap.time_ms < best.time_ms ? lap : best, null)?.lap;
+  const bestLap = completed.filter(lap => Number.isFinite(lap.time_ms) && lap.time_ms >= 0).reduce((best, lap) => !best || lap.time_ms < best.time_ms ? lap : best, null)?.lap;
+  const plan = strategyUi?.getPlan();
+  const showTargets = strategyTargets(plan).explicit;
+  $('lap-target-heading').hidden = !showTargets;
   const rows = [];
-  for (let number = 1; number <= 7; number++) {
+  for (let number = 1; number <= (data?.lap_number ?? 0); number++) {
     const lap = completed.find(item => item.lap === number);
     const isCurrent = data && data.lap_number === number && response.phase !== 'finished';
     const row = document.createElement('tr');
@@ -127,26 +131,49 @@ function renderLaps() {
     time.textContent = duration(lap?.time_ms ?? (isCurrent ? data.lap_time_ms : null));
     if (lap && bestLap === number) { const best = document.createElement('span'); best.className = 'best-mark'; best.title = '最速ラップ'; best.setAttribute('aria-label', '最速ラップ'); time.append(best); }
     const diff = document.createElement('td');
-    diff.textContent = Number.isFinite(lap?.time_ms) ? deltaDuration(lap.time_ms - lap.target_ms) : isCurrent ? archiveMode || stateIsOld() ? '記録時点' : '計測中' : '—';
-    if (Number.isFinite(lap?.time_ms)) diff.className = lap.time_ms <= lap.target_ms ? 'delta-early' : 'delta-late';
-    row.append(title, time, diff);
+    diff.textContent = lap ? '車両確定' : isCurrent ? archiveMode || stateIsOld() ? '記録時点' : '計測中' : '未取得';
+    const target = document.createElement('td');
+    target.className = 'lap-target';
+    target.hidden = !showTargets;
+    const targetMs = strategyTargets(plan, number).lap_ms;
+    target.textContent = duration(targetMs);
+    const actual = lap?.time_ms ?? (isCurrent ? data.lap_time_ms : null);
+    // Compare a completed duration, or flag an overrun already observed on the
+    // current lap. A partial lap below target is not an early finish.
+    if (targetMs !== null && actual !== null && (lap || actual > targetMs)) {
+      const delta = document.createElement('small');
+      delta.className = actual > targetMs ? 'delta-late' : 'delta-early';
+      delta.textContent = deltaDuration(actual - targetMs);
+      delta.title = lap ? '確定タイムと目標の差' : '受信時点での目標超過';
+      target.append(delta);
+    }
+    row.append(title, time, target, diff);
     rows.push(row);
   }
+  if (!rows.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = showTargets ? 4 : 3;
+    cell.textContent = data ? '確定ラップはまだありません' : '走行データを待っています';
+    row.append(cell); rows.push(row);
+  }
   $('lap-rows').replaceChildren(...rows);
-  setText('laps-summary', demoMode ? `${completed.length} / 7 周完了` : `${completed.length} / 7 周（推定）`);
+  setText('laps-summary', !data ? '受信待ち' : response.lap_times_available === false ? '確定ラップ未取得（旧形式）' : `${completed.length}周確定${response.phase === 'finished' ? ' · 完走' : ''}`);
 }
 
 function renderHistory() {
   const samples = response?.history ?? [];
   const end = response?.latest?.total_time_ms ?? 300000;
   const start = chartRange === 'all' ? 0 : Math.max(0, end - chartRange * 1000);
-  const signature = `${samples.length}-${end}-${chartRange}-${samples.at(-1)?.speed}-${samples[0]?.sample_id}`;
+  const targets = strategyTargets(strategyUi?.getPlan());
+  setText('chart-target-label', targets.explicit ? '戦略目標の平均速度' : '参考目標の平均速度');
+  const signature = `${samples.length}-${end}-${chartRange}-${samples.at(-1)?.speed}-${samples[0]?.sample_id}-${targets.total_ms}`;
   if (historySignature === signature) return;
   historySignature = signature;
   const bounds = $('speed-chart').getBoundingClientRect();
   const width = Math.max(220, bounds.width);
   const height = Math.max(110, bounds.height || 125);
-  drawSpeedChart($('speed-chart'), samples, { targetSpeed: course.length_m / TARGET_MS * 3600, fromMs: start, toMs: end, width, height, strategy: strategyUi?.getPlan(), course });
+  drawSpeedChart($('speed-chart'), samples, { targetSpeed: course.length_m / targets.total_ms * 3600, fromMs: start, toMs: end, width, height, strategy: strategyUi?.getPlan(), course });
   $('chart-empty').hidden = samples.length > 0;
 }
 

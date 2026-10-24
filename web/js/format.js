@@ -29,13 +29,15 @@ export function connectionState({ response, error, now = Date.now() }) {
   if (!response) return 'loading';
   if (!response.latest) return 'empty';
   if (response.archived) return 'archived';
+  if (response.phase === 'finished') return 'finished';
+  if (response.phase === 'waiting') return 'waiting';
   now += response.clock_offset_ms || 0;
   if (now - response.received_at_ms > STALE_MS) return 'stale';
-  return response.phase === 'finished' ? 'finished' : 'live';
+  return 'live';
 }
 
 export function csvText(history) {
-  const fields = ['timestamp_ms', 'received_at_ms', 'speed', 'average_speed', 'lap_number', 'total_time_ms', 'lap_time_ms', 'latitude', 'longitude', 'machine_id'];
+  const fields = ['timestamp_ms', 'received_at_ms', 'speed', 'average_speed', 'lap_number', 'total_time_ms', 'lap_time_ms', 'completed_lap_times_ms', 'latitude', 'longitude', 'machine_id'];
   const escape = value => value == null ? '' : `"${String(value).replaceAll('"', '""')}"`;
-  return '\uFEFF' + fields.join(',') + '\r\n' + history.map(sample => fields.map(key => escape(sample[key])).join(',')).join('\r\n');
+  return '\uFEFF' + fields.join(',') + '\r\n' + history.map(sample => fields.map(key => escape(key === 'completed_lap_times_ms' && Array.isArray(sample[key]) ? JSON.stringify(sample[key]) : sample[key])).join(',')).join('\r\n');
 }

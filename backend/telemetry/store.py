@@ -6,8 +6,6 @@ from .model import InvalidSample, normalize_sample
 
 
 MAX_WINDOW_MS = 2 * 60 * 60 * 1000
-MAX_LAP_ITEMS = 10000
-MAX_LAP_PAGES = 20
 DESERIALIZER = TypeDeserializer()
 
 
@@ -51,27 +49,6 @@ class TelemetryStore:
                 invalid += 1
         return items, response.get("LastEvaluatedKey"), invalid
 
-    def latest(self):
-        items, _, invalid = self.query(limit=1, ascending=False)
+    def latest(self, *, start=None, end=None):
+        items, _, invalid = self.query(limit=1, start=start, end=end, ascending=False)
         return items[0] if items else None, invalid
-
-    def laps_window(self, *, start, end):
-        # Read newest first so a cap always retains the most recent run.
-        items, key, invalid, evaluated, pages = [], None, 0, 0, 0
-        while evaluated < MAX_LAP_ITEMS and pages < MAX_LAP_PAGES:
-            page, key, skipped = self.query(
-                limit=min(1000, MAX_LAP_ITEMS - evaluated), start=start, end=end,
-                key=key, ascending=False,
-            )
-            items.extend(page)
-            pages += 1
-            invalid += skipped
-            evaluated += len(page) + skipped
-            if not key:
-                break
-            if not page and not skipped:
-                # No filters are used: an empty indexed page with a key is an
-                # unexpected response, so never loop indefinitely.
-                break
-        items.sort(key=lambda item: (item["received_at_ms"], item["timestamp_ms"], item["sample_id"]))
-        return items, bool(key), invalid

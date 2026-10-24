@@ -6,7 +6,6 @@ from botocore.stub import Stubber
 import pytest
 
 from backend.telemetry import handler as api
-from backend.telemetry.store import TelemetryStore
 
 
 NOW = 1800000000000
@@ -19,13 +18,16 @@ def event(path="latest", params=None, token=TOKEN, method="GET"):
             "requestContext": {"http": {"method": method}}}
 
 
-def item(identifier="one", *, received=NOW - 1000, lap=1, total=1000, lap_time=1000, uptime=121000):
-    return {"machine_id": {"S": "delta_machine_alpha"}, "sample_id": {"S": identifier},
+def item(identifier="one", *, received=NOW - 1000, lap=1, total=1000, lap_time=1000, uptime=121000, completed=None):
+    value = {"machine_id": {"S": "delta_machine_alpha"}, "sample_id": {"S": identifier},
             "received_at_ms": {"N": str(received)}, "speed": {"N": "27.125"},
             "average_speed": {"NULL": True}, "lap_number": {"N": str(lap)},
             "total_time_ms": {"N": str(total)}, "lap_time_ms": {"N": str(lap_time)},
             "timestamp_ms": {"N": str(uptime)}, "latitude": {"NULL": True},
             "longitude": {"NULL": True}, "memo": {"S": "private note"}}
+    if completed is not None:
+        value["completed_lap_times_ms"] = {"L": [{"N": str(time)} for time in completed]}
+    return value
 
 
 def key(identifier="one", received=NOW - 1000):
@@ -149,35 +151,35 @@ def test_head_preserves_status_without_returning_a_body(ddb):
     assert result["statusCode"] == 200 and result["body"] == ""
 
 
-def test_lap_three_retains_lap_two_duration_when_lap_one_is_outside_the_window(ddb):
-    ddb.add_response("query", {"Items": [
-        item("lap3", received=NOW, lap=3, total=631000, lap_time=1000, uptime=751000),
-        item("lap2", received=NOW - 330000, lap=2, total=301000, lap_time=1000, uptime=421000),
-    ]}, expected_query(limit=1000, start=NOW - 7200000, end=NOW))
+@pytest.mark.parametrize("lap,total,current,times,finished", [
+    (3, 765000, 45000, [362000, 358000], False),
+    (3, 765000, 45000, [362000, 358000, 45000], True),
+    (0, 0, 0, [], False),
+    (2, 362000, 0, [362000, 0], True),
+    (100, 100000, 1000, [1000] * 100, True),
+    (3, 765000, 45000, None, False),
+])
+def test_laps_uses_one_latest_item_not_a_history_scan(ddb, lap, total, current, times, finished):
+    ddb.add_response("query", {"Items": [item(lap=lap, total=total, lap_time=current, completed=times)]},
+                     expected_query(start=NOW - 7200000, end=NOW))
     result = api.handler(event("laps"), None)
     assert result["statusCode"] == 200
     payload = json.loads(result["body"])
-    assert payload["laps"] == [{"lap": 2, "time_ms": 330000, "source": "inferred_transition"}]
-    assert payload["finish_confirmed"] is False
+    assert payload["laps"] == [{"lap": index + 1, "time_ms": time, "source": "device"} for index, time in enumerate(times or [])]
+    assert payload["finish_confirmed"] is finished
+    assert payload["lap_times_available"] is (times is not None)
+    assert payload["truncated"] is False
+
+
+def test_latest_returns_full_array_and_empty_laps_are_not_legacy(ddb):
+    ddb.add_response("query", {"Items": [item(completed=[])]}, expected_query())
+    payload = json.loads(api.handler(event(), None)["body"])
+    assert payload["latest"]["completed_lap_times_ms"] == []
 
 
 def test_unknown_path_is_404_and_unsupported_method_is_405(ddb):
     assert api.handler(event("missing"), None)["statusCode"] == 404
     assert api.handler(event(method="POST"), None)["statusCode"] == 405
-
-
-def test_laps_reads_multiple_pages_discards_previous_run_and_never_claims_finish(ddb):
-    start, end = NOW - 7200000, NOW
-    ddb.add_response("query", {"Items": [
-        item("lap2", received=NOW, lap=2, total=300500, lap_time=500, uptime=420500),
-        item("lap1", received=NOW - 300000),
-    ], "LastEvaluatedKey": key("lap1", NOW - 300000)}, expected_query(limit=1000, start=start, end=end))
-    ddb.add_response("query", {"Items": [item("old-run", received=NOW - 600000, lap=7, total=2000000, lap_time=20000, uptime=2120000)]},
-                     expected_query(limit=1000, start=start, end=end, cursor=key("lap1", NOW - 300000)))
-    result = api.handler(event("laps"), None)
-    payload = json.loads(result["body"])
-    assert payload["laps"] == [{"lap": 1, "time_ms": 300000, "source": "inferred_transition"}]
-    assert not payload["truncated"] and not payload["finish_confirmed"]
 
 
 def test_invalid_stored_items_are_counted_and_not_returned(ddb):
@@ -211,32 +213,15 @@ def test_secret_cache_expires_and_refresh_failure_does_not_reuse_old_token(monke
         api.viewer_token()
 
 
-def test_laps_item_limit_stops_paging(monkeypatch):
-    from backend.telemetry import store as module
-    monkeypatch.setattr(module, "MAX_LAP_ITEMS", 1)
-
-    class Client:
-        def query(self, **args):
-            assert args["Limit"] == 1
-            return {"Items": [item()], "LastEvaluatedKey": key()}
-
-    store = TelemetryStore(Client(), table_name="example", index_name="example", machine_id="delta_machine_alpha")
-    items, truncated, invalid = store.laps_window(start=NOW - 10000, end=NOW)
-    assert len(items) == 1 and truncated and invalid == 0
+def test_empty_laps_endpoint_reports_unavailable_without_claiming_finish(ddb):
+    ddb.add_response("query", {"Items": []}, expected_query(start=NOW - 7200000, end=NOW))
+    payload = json.loads(api.handler(event("laps"), None)["body"])
+    assert payload["laps"] == [] and payload["latest"] is None
+    assert not payload["finish_confirmed"] and not payload["lap_times_available"]
 
 
-def test_laps_page_limit_bounds_requests_even_for_large_items(monkeypatch):
-    from backend.telemetry import store as module
-    monkeypatch.setattr(module, "MAX_LAP_PAGES", 2)
-
-    class Client:
-        calls = 0
-
-        def query(self, **args):
-            self.calls += 1
-            return {"Items": [item(str(self.calls))], "LastEvaluatedKey": key(str(self.calls))}
-
-    client = Client()
-    store = TelemetryStore(client, table_name="example", index_name="example", machine_id="delta_machine_alpha")
-    items, truncated, _ = store.laps_window(start=NOW - 10000, end=NOW)
-    assert len(items) == 2 and truncated and client.calls == 2
+def test_malformed_newest_array_is_flagged_instead_of_returning_an_older_result(ddb):
+    ddb.add_response("query", {"Items": [item(lap=3, total=765000, lap_time=45000, completed=[362000, 1])]}, expected_query())
+    payload = json.loads(api.handler(event(), None)["body"])
+    assert payload["latest"] is None
+    assert payload["invalid_items"] == 1

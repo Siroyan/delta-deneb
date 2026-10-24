@@ -1,6 +1,7 @@
-import { TARGET_MS, POLL_MS } from './format.js';
+import { POLL_MS } from './format.js';
 import { projectOnRoute } from './strategy.js';
-import { pointAtDistance, routeForLap } from './mock-api.js';
+import { pointAtDistance } from './mock-api.js';
+import { validLapState, lapPhase, deviceLaps } from './lap-state.js';
 
 export const MAX_WINDOW_MS = 7200000;
 const MAX_SAMPLES = 10000;
@@ -42,42 +43,16 @@ export function splitRuns(samples) {
   return runs;
 }
 
-export function inferLaps(samples) {
-  const laps = [];
-  // Both counters share the race clock, so any observed lap gives its start.
-  let start = samples.length ? samples[0].total_time_ms - samples[0].lap_time_ms : null;
-  for (let index = 1; index < samples.length; index++) {
-    const before = samples[index - 1], after = samples[index];
-    if (after.lap_number === before.lap_number) continue;
-    const end = after.total_time_ms - after.lap_time_ms;
-    const duration = start !== null && after.lap_number === before.lap_number + 1 ? end - start : null;
-    laps.push({ lap: before.lap_number, time_ms: duration > 0 ? duration : null, source: 'inferred_transition' });
-    start = end;
-  }
-  return laps;
-}
-
-function mergeLaps(...sources) {
-  const merged = new Map();
-  for (const source of sources) for (const lap of source) {
-    // Partial index reads must not erase a duration already observed this run.
-    if (lap.time_ms !== null || !merged.has(lap.lap)) merged.set(lap.lap, lap);
-  }
-  return [...merged.values()].sort((a, b) => a.lap - b.lap);
-}
-
-export function snapshot(samples, course, { laps = null, archived = false, warnings = [], clockOffsetMs = 0, loadingHistory = false } = {}) {
-  const latest = samples.at(-1) ?? null;
-  const lap = latest ? routeForLap(course, latest.lap_number) : null;
-  const projection = lap && latest ? projectOnRoute(lap, latest.latitude, latest.longitude) : null;
+export function snapshot(samples, course, { latest = samples.at(-1) ?? null, archived = false, warnings = [], clockOffsetMs = 0, loadingHistory = false } = {}) {
+  // MQTT has no course ID or planned lap count. Use GPS against the configured
+  // map rather than treating lap 7 as the final route for every measurement.
+  const candidates = latest ? Object.values(course.routes).map(route => ({ route, projection: projectOnRoute(route, latest.latitude, latest.longitude) })).filter(item => item.projection) : [];
+  const nearest = candidates.sort((a, b) => a.projection.distance_m - b.projection.distance_m)[0];
   return {
     latest, received_at_ms: latest?.received_at_ms ?? null, history: samples,
-    laps: (laps ?? inferLaps(samples)).map(item => {
-      const route = routeForLap(course, item.lap);
-      return { ...item, distance_m: route.length_m, target_ms: route.length_m / course.length_m * TARGET_MS };
-    }),
-    phase: latest ? 'running' : 'waiting',
-    position: projection ? pointAtDistance(lap, projection.s) : null,
+    laps: deviceLaps(latest), lap_times_available: Array.isArray(latest?.completed_lap_times_ms),
+    phase: lapPhase(latest),
+    position: nearest ? pointAtDistance(nearest.route, nearest.projection.s) : null,
     archived, warnings, clock_offset_ms: clockOffsetMs, loading_history: loadingHistory,
   };
 }
@@ -85,15 +60,15 @@ export function snapshot(samples, course, { laps = null, archived = false, warni
 function sampleIsValid(sample) {
   return sample && typeof sample.sample_id === 'string' && sample.sample_id.length > 0 && sample.machine_id === 'delta_machine_alpha'
     && ['received_at_ms', 'timestamp_ms', 'total_time_ms', 'lap_time_ms', 'lap_number'].every(key => Number.isSafeInteger(sample[key]) && sample[key] >= 0)
-    && sample.lap_number >= 1 && sample.lap_number <= 7 && sample.lap_time_ms <= sample.total_time_ms
+    && validLapState(sample)
     && ['speed', 'average_speed', 'latitude', 'longitude'].every(key => sample[key] === null || (typeof sample[key] === 'number' && Number.isFinite(sample[key])));
 }
 
 export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch, now = Date.now, timeoutMs = 10000 }) {
-  let history = [], latest = null, laps = [], serverLaps = [], lapKey = null, generation = 0, lapsTruncated = false;
+  let history = [], latest = null, generation = 0;
   let pending = null, syncedTo = null, truncated = false, offset = 0;
   let latestMissing = false, historyBusy = false, detailsTask = null, detailsController = null;
-  const retry = { history: { at: 0, failures: 0 }, laps: { at: 0, failures: 0 } };
+  const retry = { history: { at: 0, failures: 0 } };
 
   async function request(path, params, signal) {
     if (!token) throw new ApiError('missing_token', { status: 401 });
@@ -132,7 +107,6 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
 
   function rememberSamples(items) {
     const all = splitRuns([...history, ...items, latest]).at(-1) ?? [];
-    laps = mergeLaps(laps, inferLaps(all));
     truncated ||= all.length > MAX_SAMPLES;
     history = all.slice(-MAX_SAMPLES);
   }
@@ -140,11 +114,10 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
   function currentSnapshot() {
     const warnings = [];
     if (latestMissing) warnings.push('latest_unavailable');
-    for (const channel of ['history', 'laps']) if (retry[channel].failures) warnings.push(`${channel}_unavailable`);
-    if (truncated || lapsTruncated) warnings.push('history_truncated');
-    laps = mergeLaps(laps, inferLaps(history), serverLaps);
+    if (retry.history.failures) warnings.push('history_unavailable');
+    if (truncated) warnings.push('history_truncated');
     return snapshot(history, course, {
-      laps, warnings, clockOffsetMs: offset,
+      latest, warnings, clockOffsetMs: offset,
       loadingHistory: !!latest && !retry.history.failures && (historyBusy || !!pending || syncedTo === null),
     });
   }
@@ -174,9 +147,9 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
       if (candidate && (!latest || candidate.received_at_ms >= latest.received_at_ms)) {
         if (isRunReset(latest, candidate)) {
           detailsController?.abort();
-          history = []; laps = []; serverLaps = []; lapKey = null; syncedTo = null; pending = null;
-          truncated = false; lapsTruncated = false; historyBusy = false; generation++;
-          retry.history = { at: 0, failures: 0 }; retry.laps = { at: 0, failures: 0 };
+          history = []; syncedTo = null; pending = null;
+          truncated = false; historyBusy = false; generation++;
+          retry.history = { at: 0, failures: 0 };
         }
         latest = candidate;
         rememberSamples([candidate]);
@@ -219,17 +192,6 @@ export function createTelemetryApi({ course, token, fetchImpl = globalThis.fetch
           } finally {
             historyBusy = false;
           }
-        }, ensureCurrent);
-        const key = `${run}:${anchor.lap_number}`;
-        if (key !== lapKey) await background('laps', async () => {
-          const result = await request('laps', { from_ms: start, to_ms: end }, controller.signal);
-          ensureCurrent();
-          if (!Array.isArray(result.laps) || !result.laps.every(lap => Number.isInteger(lap.lap) && lap.lap >= 1 && lap.lap <= 7 && (lap.time_ms === null || (Number.isFinite(lap.time_ms) && lap.time_ms > 0)))) throw new ApiError('invalid_response');
-          // Compare with the request's sample, not a newer concurrent latest poll.
-          if (!result.latest || result.latest.lap_number !== anchor.lap_number || Math.abs((result.latest.timestamp_ms - result.latest.total_time_ms) - (anchor.timestamp_ms - anchor.total_time_ms)) > 1000) throw new ApiError('index_pending');
-          serverLaps = result.laps;
-          lapsTruncated = !!result.truncated;
-          lapKey = key;
         }, ensureCurrent);
         ensureCurrent();
         return currentSnapshot();

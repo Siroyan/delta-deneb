@@ -1,0 +1,13 @@
+{
+  "speed": 24.5,
+  "average_speed": 22.1,
+  "lap_number": 3,
+  "total_time_ms": 765000,
+  "lap_time_ms": 45000,
+  "latitude": 36.532766,
+  "longitude": 140.226269,
+  "timestamp_ms": 865000,
+  "machine_id": "delta_machine_alpha",
+  "memo": "contract fixture",
+  "completed_lap_times_ms": [362000, 358000]
+}

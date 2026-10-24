@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createMockApi, pointAtDistance, routeForLap } from '../web/js/mock-api.js';
+import { validLapState } from '../web/js/lap-state.js';
 import { connectionState, csvText } from '../web/js/format.js';
 
 const course = JSON.parse(await readFile(new URL('../web/assets/course.json', import.meta.url), 'utf8'));
@@ -111,4 +112,22 @@ test('route interpolation clamps endpoints and CSV preserves missing values', as
   const csv = csvText(snapshot.history);
   assert.ok(csv.startsWith('\uFEFFtimestamp_ms,received_at_ms,'));
   assert.ok(csv.endsWith(',,,"pi"'));
+});
+
+test('demo emits the same completed array contract across natural transitions and finish', async () => {
+  const { api, tick } = setup();
+  for (let index = 0; index < 180; index++) {
+    tick(7141);
+    const value = await api.getLatest();
+    assert.equal(validLapState(value.latest), true);
+    assert.ok(value.history.every(validLapState));
+    assert.deepEqual(value.laps.map(item => item.time_ms), value.latest.completed_lap_times_ms);
+  }
+});
+
+test('CSV encodes completed arrays as one JSON field and keeps legacy distinct', () => {
+  const value = csvText([{ completed_lap_times_ms: [362000, 0] }, { completed_lap_times_ms: [] }, {}]);
+  assert.ok(value.includes('completed_lap_times_ms'));
+  assert.ok(value.includes('"[362000,0]"'));
+  assert.ok(value.includes('"[]"'));
 });

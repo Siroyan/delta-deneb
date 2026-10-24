@@ -117,7 +117,8 @@ def test_preview_can_reproduce_lap_two_to_three_with_partial_api_results():
         assert len(history["history"]) == 1
         assert history["history"][0]["lap_number"] == 3
         _, _, laps = get(base, "/api/telemetry/laps")
-        assert laps["truncated"] and laps["laps"][0]["time_ms"] is None
+        assert not laps["truncated"]
+        assert [lap["time_ms"] for lap in laps["laps"]] == [300000, 330000]
 
 
 def test_preview_can_delay_details_without_delaying_latest(monkeypatch):
@@ -129,3 +130,10 @@ def test_preview_can_delay_details_without_delaying_latest(monkeypatch):
         assert get(base, "/api/telemetry/history")[0] == 200
         assert get(base, "/api/telemetry/laps")[0] == 200
         assert delays == [8, 8]
+
+@pytest.mark.parametrize("scenario", ["live", "lap-2", "lap-3-partial", "latest-only", "waiting", "started", "finished", "zero-final", "lap-100", "legacy"])
+def test_preview_samples_obey_device_contract(scenario):
+    from backend.telemetry.model import normalize_sample
+    for sample in PreviewData(scenario).samples():
+        normalized = normalize_sample(sample, received_at_ms=sample["received_at_ms"])
+        assert normalized["completed_lap_times_ms"] == sample.get("completed_lap_times_ms")

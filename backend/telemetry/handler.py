@@ -14,7 +14,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from backend.health.handler import handler as health_handler
-from .model import current_run, lap_summaries
+from .model import finish_confirmed, lap_summaries
 from .store import MAX_WINDOW_MS, TelemetryStore
 
 
@@ -152,11 +152,11 @@ def handler(event, context):
                        "fetched_at_ms": now, "invalid_items": invalid}
         else:
             start, end = window(params, now)
-            items, truncated, invalid = store.laps_window(start=start, end=end)
-            run = current_run(items)
-            payload = {"laps": lap_summaries(run), "latest": run[-1] if run else None,
-                       "from_ms": start, "to_ms": end, "truncated": truncated,
-                       "invalid_items": invalid, "fetched_at_ms": now, "finish_confirmed": False}
+            latest, invalid = store.latest(start=start, end=end)
+            payload = {"laps": lap_summaries([latest] if latest else []), "latest": latest,
+                       "from_ms": start, "to_ms": end, "truncated": False,
+                       "lap_times_available": latest is not None and latest["completed_lap_times_ms"] is not None,
+                       "invalid_items": invalid, "fetched_at_ms": now, "finish_confirmed": finish_confirmed(latest)}
         return response(200, payload, method=method)
     except BadRequest:
         return error(400, "invalid_request", method=method)

@@ -22,7 +22,7 @@
 - `web/js/mock-api.js`: 非同期の模擬データ取得とシナリオ。
 - `web/js/format.js`: 欠測を含む値の表示、接続判定、参考値の算出。
 - `web/js/charts.js`: SVGコース図、速度グラフ、戦略区間の背景。
-- `web/js/strategy.js`: delta-vega schema 1の検証とGPSの経路投影。
+- `web/js/strategy.js`: delta-vega schema 1 / 2の検証とGPSの経路投影。
 - `web/js/strategy-ui.js`: ファイル選択、ブラウザ保存、戦略表示。
 - `web/assets/course.json`: もてぎの表示・経路投影用データ。
 - `web/assets/motegi_demo.json`: 読み込み確認用の戦略。
@@ -33,7 +33,7 @@
 
 MQTT項目はローカルのdelta-vega-v2の`lib/vega_core/src/application/telemetry_json.cpp`を参照した。確認済み項目は`speed`、`average_speed`、`lap_number`、`total_time_ms`、`lap_time_ms`、`latitude`、`longitude`、`timestamp_ms`、`machine_id`、`memo`。
 
-模擬APIは中盤のLAP 4から始まり、時刻の経過とともに速度・距離・ラップを更新する。車両の実測値を表示するものではない。テスト用の目標は38:30、更新周期は3秒、更新停止判定は受信から10秒超。目標は参考値。実APIでも更新周期3秒・更新停止10秒を使い、実運用の計測結果に合わせて調整する。
+模擬APIは中盤のLAP 4から始まり、時刻の経過とともに速度・距離・ラップを更新する。車両の実測値を表示するものではない。schema 2の戦略から全体・各周の目標を読み込み、未指定の場合のテスト用目標は38:30、更新周期は3秒、更新停止判定は受信から10秒超。目標は参考値。実APIでも更新周期3秒・更新停止10秒を使い、実運用の計測結果に合わせて調整する。
 
 `web/assets/course.json`は、delta-vega-v2の`assets/maps/motegi_oval_full/course.json`にある`segments`、`routes`、`landmarks`と座標変換から生成した。見やすい横向きの模式図へ回転・縮尺調整し、経路内距離・緯度経度を保持している。GPS由来の基準経路であり、測量済みのコース境界ではない。初周・中間周・最終周で経路長が異なる。
 
